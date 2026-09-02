@@ -11,6 +11,17 @@ import {
   verifyApprovalToken
 } from "./security/approval";
 import { runStalePriceDemo } from "./security/stale-price-demo";
+import { getDb, type DatabaseEnv } from "./db/client";
+import {
+  appendAuditEvent,
+  getAuditEvents,
+  hashToken,
+  verifyAuditRows
+} from "./db/audit";
+import {
+  persistApproval,
+  persistIntent
+} from "./db/repository";
 
 export { PurchaseAgent } from "./agent/purchase-agent";
 
@@ -24,9 +35,10 @@ type ParseIntentBody = {
   message?: string;
 };
 
-type ApprovalEnv = Env & {
-  APPROVAL_SIGNING_SECRET?: string;
-};
+type AppEnv = Env &
+  DatabaseEnv & {
+    APPROVAL_SIGNING_SECRET?: string;
+  };
 
 function json(data: unknown, status = 200) {
   return new Response(JSON.stringify(data, null, 2), {
@@ -40,7 +52,7 @@ function json(data: unknown, status = 200) {
   });
 }
 
-function approvalSecret(env: ApprovalEnv): string {
+function approvalSecret(env: AppEnv): string {
   const secret = env.APPROVAL_SIGNING_SECRET;
   if (!secret) {
     throw new Error(
@@ -51,7 +63,9 @@ function approvalSecret(env: ApprovalEnv): string {
 }
 
 export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
+  async fetch(request: Request, rawEnv: Env): Promise<Response> {
+    const env = rawEnv as AppEnv;
+
     if (request.method === "OPTIONS") {
       return new Response(null, {
         status: 204,
@@ -80,9 +94,18 @@ export default {
         }
 
         const intent = await parseIntent(env.AI, body.message);
+        const sql = getDb(env);
+
+        await persistIntent(sql, intent);
+        await appendAuditEvent(sql, intent.id, "INTENT_CREATED", {
+          intent,
+          source: "workers-ai",
+          model: "@cf/meta/llama-3.1-8b-instruct-fast"
+        });
 
         return json({
           intent,
+          persisted: true,
           source: "workers-ai",
           model: "@cf/meta/llama-3.1-8b-instruct-fast"
         });
@@ -110,12 +133,35 @@ export default {
 
         const intent = IntentContractSchema.parse(body.intent);
         const proposal = PurchaseProposalSchema.parse(body.proposal);
+        const sql = getDb(env);
+
+        await persistIntent(sql, intent);
 
         const approval = await createApprovalToken(
           intent,
           proposal,
-          approvalSecret(env as ApprovalEnv),
+          approvalSecret(env),
           body.ttlSeconds ?? 300
+        );
+
+        await persistApproval(
+          sql,
+          approval.payload,
+          await hashToken(approval.token)
+        );
+
+        await appendAuditEvent(
+          sql,
+          intent.id,
+          "APPROVAL_CREATED",
+          {
+            approvalId: approval.payload.approvalId,
+            quoteHash: approval.payload.quoteHash,
+            productId: proposal.productId,
+            amount: approval.payload.amount,
+            quantity: proposal.quantity,
+            expiresAt: approval.payload.expiresAt
+          }
         );
 
         return json({
@@ -128,7 +174,8 @@ export default {
             currency: proposal.currency,
             expiresAt: approval.payload.expiresAt,
             exactQuoteBound: true
-          }
+          },
+          persisted: true
         });
       } catch (error) {
         return json(
@@ -164,12 +211,25 @@ export default {
 
         const intent = IntentContractSchema.parse(body.intent);
         const proposal = PurchaseProposalSchema.parse(body.proposal);
-
         const result = await verifyApprovalToken(
           body.token,
           intent,
           proposal,
-          approvalSecret(env as ApprovalEnv)
+          approvalSecret(env)
+        );
+
+        const sql = getDb(env);
+        await persistIntent(sql, intent);
+
+        await appendAuditEvent(
+          sql,
+          intent.id,
+          result.allowed ? "APPROVAL_VERIFIED" : "TRANSACTION_BLOCKED",
+          {
+            result,
+            productId: proposal.productId,
+            amount: proposal.quantity * proposal.unitPrice
+          }
         );
 
         return json(result, result.allowed ? 200 : 409);
@@ -191,10 +251,38 @@ export default {
       try {
         const body = await request.json();
         const result = runPromptInjectionAttack(body);
+        const intent = IntentContractSchema.parse(
+          (body as { intent: unknown }).intent
+        );
+        const sql = getDb(env);
+
+        await persistIntent(sql, intent);
+
+        await appendAuditEvent(sql, intent.id, "MERCHANT_DATA_READ", {
+          productId: result.attack.merchantProductId,
+          merchantText: result.attack.maliciousMerchantText
+        });
+
+        await appendAuditEvent(sql, intent.id, "AGENT_PROPOSAL_CREATED", {
+          proposal: result.agentProposal,
+          compromisedByFixture: true
+        });
+
+        await appendAuditEvent(sql, intent.id, "POLICY_CHECKED", {
+          decision: result.policyDecision
+        });
+
+        await appendAuditEvent(sql, intent.id, "TRANSACTION_BLOCKED", {
+          reason: result.policyDecision.code,
+          violations: result.policyDecision.violations,
+          attemptedAmount: result.policyDecision.totalAmount,
+          moneyMoved: result.moneyMoved
+        });
 
         return json({
           demo: "PROMPT_INJECTION_ATTACK",
-          ...result
+          ...result,
+          auditPersisted: true
         });
       } catch (error) {
         return json(
@@ -215,10 +303,43 @@ export default {
         const body = await request.json();
         const result = await runStalePriceDemo(
           body,
-          approvalSecret(env as ApprovalEnv)
+          approvalSecret(env)
         );
 
-        return json(result);
+        const intent = IntentContractSchema.parse(
+          (body as { intent: unknown }).intent
+        );
+        const sql = getDb(env);
+
+        await persistIntent(sql, intent);
+
+        await appendAuditEvent(sql, intent.id, "APPROVAL_CREATED", {
+          approvalId: result.approval.approvalId,
+          approvedAmount: result.approval.approvedAmount,
+          approvedQuoteHash: result.approval.approvedQuoteHash,
+          expiresAt: result.approval.expiresAt
+        });
+
+        await appendAuditEvent(sql, intent.id, "QUOTE_CHANGED", {
+          originalUnitPrice: result.merchantChange.originalUnitPrice,
+          currentUnitPrice: result.merchantChange.currentUnitPrice,
+          delta: result.merchantChange.delta,
+          verificationCode: result.checkoutVerification.code
+        });
+
+        await appendAuditEvent(sql, intent.id, "TRANSACTION_BLOCKED", {
+          reason: result.checkoutVerification.code,
+          approvedAmount: result.approval.approvedAmount,
+          attemptedAmount:
+            result.merchantChange.currentUnitPrice *
+            Number((body as any).proposal.quantity),
+          moneyMoved: result.moneyMoved
+        });
+
+        return json({
+          ...result,
+          auditPersisted: true
+        });
       } catch (error) {
         return json(
           {
@@ -226,6 +347,46 @@ export default {
             message: error instanceof Error ? error.message : String(error)
           },
           400
+        );
+      }
+    }
+
+    if (
+      request.method === "GET" &&
+      url.pathname.startsWith("/api/audit/")
+    ) {
+      try {
+        const streamId = decodeURIComponent(
+          url.pathname.slice("/api/audit/".length)
+        );
+
+        if (!streamId) {
+          return json(
+            {
+              error: "INVALID_REQUEST",
+              message: "Missing audit stream ID."
+            },
+            400
+          );
+        }
+
+        const sql = getDb(env);
+        const events = await getAuditEvents(sql, streamId);
+        const verification = await verifyAuditRows(events);
+
+        return json({
+          streamId,
+          eventCount: events.length,
+          chain: verification,
+          events
+        });
+      } catch (error) {
+        return json(
+          {
+            error: "AUDIT_READ_FAILED",
+            message: error instanceof Error ? error.message : String(error)
+          },
+          500
         );
       }
     }
@@ -257,7 +418,8 @@ export default {
       return json({
         service: "intentlock-worker",
         status: "ok",
-        version: "v4"
+        version: "v5",
+        databaseConfigured: Boolean(env.DATABASE_URL)
       });
     }
 

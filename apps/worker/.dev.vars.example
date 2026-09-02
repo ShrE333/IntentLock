@@ -1,2 +1,2 @@
-# Copy this file to .dev.vars and replace the value with a strong random secret.
 APPROVAL_SIGNING_SECRET=replace-with-at-least-24-random-characters
+DATABASE_URL=postgresql://USER:PASSWORD@HOST/DBNAME?sslmode=require
