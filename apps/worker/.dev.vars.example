@@ -3,3 +3,7 @@ DATABASE_URL=postgresql://USER:PASSWORD@HOST/DBNAME?sslmode=require
 
 UPSTASH_REDIS_REST_URL=https://YOUR-DATABASE.upstash.io
 UPSTASH_REDIS_REST_TOKEN=YOUR_UPSTASH_REST_TOKEN
+
+RAZORPAY_KEY_ID=rzp_test_xxxxxxxxxx
+RAZORPAY_KEY_SECRET=xxxxxxxxxxxxxxxx
+RAZORPAY_WEBHOOK_SECRET=choose-a-separate-random-webhook-secret

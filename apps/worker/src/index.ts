@@ -18,13 +18,18 @@ import {
   appendAuditEvent,
   getAuditEvents,
   hashToken,
-  verifyAuditRows
+  verifyAuditRows,
+  sha256Hex
 } from "./db/audit";
 import {
   persistApproval,
   persistBlockedTransaction,
   persistIntent
 } from "./db/repository";
+import { buildCheckoutIdempotencyKey } from "./idempotency/checkout";
+import { createRazorpayPaymentLink } from "./payments/razorpay";
+import { verifyRazorpayWebhook } from "./payments/webhook";
+import { getPaymentLinkByKey, persistPaymentLink, persistWebhook, markPaymentLinkPaid } from "./db/payment-repository";
 
 export { PurchaseAgent } from "./agent/purchase-agent";
 
@@ -43,6 +48,9 @@ type AppEnv = Env &
     APPROVAL_SIGNING_SECRET?: string;
     UPSTASH_REDIS_REST_URL?: string;
     UPSTASH_REDIS_REST_TOKEN?: string;
+    RAZORPAY_KEY_ID?: string;
+    RAZORPAY_KEY_SECRET?: string;
+    RAZORPAY_WEBHOOK_SECRET?: string;
   };
 
 function json(data: unknown, status = 200) {
@@ -51,7 +59,7 @@ function json(data: unknown, status = 200) {
     headers: {
       "content-type": "application/json; charset=utf-8",
       "access-control-allow-origin": "*",
-      "access-control-allow-headers": "content-type",
+      "access-control-allow-headers": "content-type,x-razorpay-signature",
       "access-control-allow-methods": "GET,POST,OPTIONS"
     }
   });
@@ -76,13 +84,82 @@ export default {
         status: 204,
         headers: {
           "access-control-allow-origin": "*",
-          "access-control-allow-headers": "content-type",
+          "access-control-allow-headers": "content-type,x-razorpay-signature",
           "access-control-allow-methods": "GET,POST,OPTIONS"
         }
       });
     }
 
     const url = new URL(request.url);
+
+
+    if (request.method === "POST" && url.pathname === "/webhooks/razorpay") {
+      const rawBody = await request.text();
+      const signature = request.headers.get("x-razorpay-signature");
+      if (!await verifyRazorpayWebhook(rawBody, signature, env.RAZORPAY_WEBHOOK_SECRET)) {
+        return json({ error: "INVALID_WEBHOOK_SIGNATURE" }, 401);
+      }
+      try {
+        const payload = JSON.parse(rawBody) as any;
+        const eventType = String(payload.event ?? "unknown");
+        const linkId = payload?.payload?.payment_link?.entity?.id ?? null;
+        const paymentId = payload?.payload?.payment?.entity?.id ?? null;
+        const sql = getDb(env);
+        const inserted = await persistWebhook(sql, {
+          payloadHash: await sha256Hex(rawBody), eventType,
+          providerEntityId: linkId, payload
+        });
+        if (!inserted) return json({ received: true, duplicate: true });
+        if (eventType === "payment_link.paid" && linkId) {
+          const applied = await markPaymentLinkPaid(sql, linkId, paymentId);
+          if (applied) {
+            await appendAuditEvent(sql, applied.intentId, "WEBHOOK_RECEIVED", { eventType, linkId, paymentId });
+            await appendAuditEvent(sql, applied.intentId, "PAYMENT_CAPTURED", { provider: "razorpay", linkId, paymentId });
+          }
+        }
+        return json({ received: true, duplicate: false });
+      } catch (error) {
+        return json({ error: "WEBHOOK_PROCESSING_FAILED", message: error instanceof Error ? error.message : String(error) }, 500);
+      }
+    }
+
+    if (request.method === "POST" && url.pathname === "/api/payments/create-link") {
+      try {
+        const body = await request.json() as any;
+        if (typeof body.token !== "string") return json({error:"INVALID_REQUEST",message:"token required"},400);
+        const intent = IntentContractSchema.parse(body.intent);
+        const proposal = PurchaseProposalSchema.parse(body.proposal);
+        const approval = await verifyApprovalToken(body.token, intent, proposal, approvalSecret(env));
+        if (!approval.allowed) return json({ok:false,code:approval.code},409);
+        const remainingMs = new Date(approval.payload.expiresAt).getTime() - Date.now();
+        if (remainingMs < 15*60*1000) return json({ok:false,code:"APPROVAL_TOO_SHORT_FOR_PAYMENT_LINK",minimumRemainingSeconds:900},409);
+        const sql = getDb(env);
+        const idempotencyKey = await buildCheckoutIdempotencyKey(intent, proposal);
+        const existing = await getPaymentLinkByKey(sql, idempotencyKey);
+        if (existing) return json({ok:true,duplicate:true,idempotencyKey,paymentLink:existing});
+        const store = UpstashIdempotencyStore.fromEnv(env);
+        const claim = await store.claim(idempotencyKey, JSON.stringify({intentId:intent.id,approvalId:approval.payload.approvalId}), 900);
+        if (!claim.acquired) return json({ok:false,code:"CHECKOUT_ALREADY_IN_PROGRESS",idempotencyKey},409);
+        const amount = proposal.quantity * proposal.unitPrice;
+        const providerLink = await createRazorpayPaymentLink(env, {
+          amountRupees: amount, currency: proposal.currency, idempotencyKey,
+          intentId: intent.id, approvalId: approval.payload.approvalId,
+          productId: proposal.productId,
+          expireBy: Math.floor(new Date(approval.payload.expiresAt).getTime()/1000)
+        });
+        const persisted = await persistPaymentLink(sql, {
+          intentId:intent.id, approvalId:approval.payload.approvalId, idempotencyKey,
+          providerLinkId:providerLink.id, referenceId:providerLink.reference_id,
+          shortUrl:providerLink.short_url, amount, currency:proposal.currency,
+          status:providerLink.status,
+          expiresAt: providerLink.expire_by ? new Date(providerLink.expire_by*1000).toISOString() : approval.payload.expiresAt
+        });
+        await appendAuditEvent(sql, intent.id, "PAYMENT_LINK_CREATED", {provider:"razorpay",providerLinkId:providerLink.id,amount,idempotencyKey});
+        return json({ok:true,duplicate:false,idempotencyKey,paymentLink:persisted});
+      } catch (error) {
+        return json({error:"PAYMENT_LINK_CREATION_FAILED",message:error instanceof Error ? error.message : String(error)},400);
+      }
+    }
 
     if (request.method === "POST" && url.pathname === "/api/intents/parse") {
       try {
@@ -499,12 +576,16 @@ export default {
       return json({
         service: "intentlock-worker",
         status: "ok",
-        version: "v6",
+        version: "v7",
         databaseConfigured: Boolean(env.DATABASE_URL),
         redisConfigured: Boolean(
           env.UPSTASH_REDIS_REST_URL &&
           env.UPSTASH_REDIS_REST_TOKEN
-        )
+        ),
+        razorpayConfigured: Boolean(
+          env.RAZORPAY_KEY_ID && env.RAZORPAY_KEY_SECRET
+        ),
+        webhookConfigured: Boolean(env.RAZORPAY_WEBHOOK_SECRET)
       });
     }
 
