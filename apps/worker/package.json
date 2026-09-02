@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.0.1",
+    "@upstash/redis": "^1.35.3",
     "agents": "^0.3.0",
     "zod": "^4.0.0"
   },

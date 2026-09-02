@@ -79,3 +79,44 @@ export async function persistApproval(
     ON CONFLICT (id) DO NOTHING
   `;
 }
+
+export async function persistBlockedTransaction(
+  sql: NeonQueryFunction<false, false>,
+  input: {
+    intentId: string;
+    idempotencyKey: string;
+    amount: number;
+    currency: "INR";
+  }
+) {
+  const rows = await sql`
+    INSERT INTO transactions (
+      intent_id,
+      idempotency_key,
+      amount,
+      currency,
+      state
+    )
+    VALUES (
+      ${input.intentId},
+      ${input.idempotencyKey},
+      ${input.amount},
+      ${input.currency},
+      'BLOCKED'
+    )
+    ON CONFLICT (idempotency_key)
+    DO UPDATE SET
+      updated_at = NOW()
+    RETURNING
+      id::text,
+      intent_id,
+      idempotency_key,
+      amount,
+      currency,
+      state,
+      created_at,
+      updated_at
+  `;
+
+  return rows[0];
+}

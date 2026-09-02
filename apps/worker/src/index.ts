@@ -11,6 +11,8 @@ import {
   verifyApprovalToken
 } from "./security/approval";
 import { runStalePriceDemo } from "./security/stale-price-demo";
+import { runDuplicateCheckoutDemo } from "./security/duplicate-checkout-demo";
+import { UpstashIdempotencyStore } from "./idempotency/store";
 import { getDb, type DatabaseEnv } from "./db/client";
 import {
   appendAuditEvent,
@@ -20,6 +22,7 @@ import {
 } from "./db/audit";
 import {
   persistApproval,
+  persistBlockedTransaction,
   persistIntent
 } from "./db/repository";
 
@@ -38,6 +41,8 @@ type ParseIntentBody = {
 type AppEnv = Env &
   DatabaseEnv & {
     APPROVAL_SIGNING_SECRET?: string;
+    UPSTASH_REDIS_REST_URL?: string;
+    UPSTASH_REDIS_REST_TOKEN?: string;
   };
 
 function json(data: unknown, status = 200) {
@@ -306,9 +311,17 @@ export default {
           approvalSecret(env)
         );
 
+        const typedBody = body as {
+          intent: unknown;
+          proposal: {
+            quantity: number;
+          };
+        };
+
         const intent = IntentContractSchema.parse(
-          (body as { intent: unknown }).intent
+          typedBody.intent
         );
+
         const sql = getDb(env);
 
         await persistIntent(sql, intent);
@@ -332,7 +345,7 @@ export default {
           approvedAmount: result.approval.approvedAmount,
           attemptedAmount:
             result.merchantChange.currentUnitPrice *
-            Number((body as any).proposal.quantity),
+            typedBody.proposal.quantity,
           moneyMoved: result.moneyMoved
         });
 
@@ -344,6 +357,74 @@ export default {
         return json(
           {
             error: "STALE_PRICE_DEMO_FAILED",
+            message: error instanceof Error ? error.message : String(error)
+          },
+          400
+        );
+      }
+    }
+
+    if (
+      request.method === "POST" &&
+      url.pathname === "/api/security/duplicate-checkout-demo"
+    ) {
+      try {
+        const body = await request.json();
+        const typed = body as {
+          intent: unknown;
+          proposal: unknown;
+        };
+
+        const intent = IntentContractSchema.parse(typed.intent);
+        const proposal = PurchaseProposalSchema.parse(typed.proposal);
+        const store = UpstashIdempotencyStore.fromEnv(env);
+
+        const result = await runDuplicateCheckoutDemo(body, store);
+        const sql = getDb(env);
+
+        await persistIntent(sql, intent);
+
+        if (result.idempotencyKey) {
+          await appendAuditEvent(
+            sql,
+            intent.id,
+            "IDEMPOTENCY_CLAIMED",
+            {
+              idempotencyKey: result.idempotencyKey,
+              paymentAttempts: result.paymentAttempts
+            }
+          );
+
+          await persistBlockedTransaction(
+            sql,
+            {
+              intentId: intent.id,
+              idempotencyKey: result.idempotencyKey,
+              amount:
+                proposal.quantity *
+                proposal.unitPrice,
+              currency: proposal.currency
+            }
+          );
+        }
+
+        for (const attempt of result.attempts.slice(1)) {
+          await appendAuditEvent(
+            sql,
+            intent.id,
+            "DUPLICATE_CHECKOUT_REJECTED",
+            attempt
+          );
+        }
+
+        return json({
+          ...result,
+          auditPersisted: true
+        });
+      } catch (error) {
+        return json(
+          {
+            error: "DUPLICATE_CHECKOUT_DEMO_FAILED",
             message: error instanceof Error ? error.message : String(error)
           },
           400
@@ -418,8 +499,12 @@ export default {
       return json({
         service: "intentlock-worker",
         status: "ok",
-        version: "v5",
-        databaseConfigured: Boolean(env.DATABASE_URL)
+        version: "v6",
+        databaseConfigured: Boolean(env.DATABASE_URL),
+        redisConfigured: Boolean(
+          env.UPSTASH_REDIS_REST_URL &&
+          env.UPSTASH_REDIS_REST_TOKEN
+        )
       });
     }
 
