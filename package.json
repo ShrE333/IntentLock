@@ -1,0 +1,4 @@
+{
+  "name":"intentlock","private":true,"workspaces":["apps/*"],
+  "scripts":{"dev:worker":"npm --workspace apps/worker run dev","dev:web":"npm --workspace apps/web run dev","test":"npm --workspace apps/worker test"}
+}

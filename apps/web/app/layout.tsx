@@ -1,0 +1,1 @@
+import type {ReactNode} from "react";import "./styles.css";export const metadata={title:"IntentLock",description:"AI payments, locked by trust."};export default function RootLayout({children}:{children:ReactNode}){return <html lang="en"><body>{children}</body></html>}
