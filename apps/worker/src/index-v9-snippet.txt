@@ -1,0 +1,32 @@
+V9 addition for apps/worker/src/index.ts:
+
+1) Add import:
+
+import { runFullEvalSuite } from "./evals/run";
+
+2) Add this route before /api/evaluate:
+
+if (
+  request.method === "GET" &&
+  url.pathname === "/api/evals"
+) {
+  try {
+    const result = await runFullEvalSuite();
+    return json(result);
+  } catch (error) {
+    return json(
+      {
+        error: "EVAL_SUITE_FAILED",
+        message:
+          error instanceof Error
+            ? error.message
+            : String(error)
+      },
+      500
+    );
+  }
+}
+
+3) Change health version to:
+
+version: "v9"

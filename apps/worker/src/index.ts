@@ -1,3 +1,4 @@
+﻿import { runFullEvalSuite } from "./evals/run";
 import { routeAgentRequest } from "agents";
 import {
   IntentContractSchema,
@@ -91,6 +92,28 @@ export default {
     }
 
     const url = new URL(request.url);
+
+    if (
+      request.method === "GET" &&
+      url.pathname === "/api/evals"
+    ) {
+      try {
+        const result = await runFullEvalSuite();
+
+        return json(result);
+      } catch (error) {
+        return json(
+          {
+            error: "EVAL_SUITE_FAILED",
+            message:
+              error instanceof Error
+                ? error.message
+                : String(error)
+          },
+          500
+        );
+      }
+    }
 
 
     if (request.method === "POST" && url.pathname === "/webhooks/razorpay") {
@@ -576,7 +599,7 @@ export default {
       return json({
         service: "intentlock-worker",
         status: "ok",
-        version: "v7",
+        version: "v9",
         databaseConfigured: Boolean(env.DATABASE_URL),
         redisConfigured: Boolean(
           env.UPSTASH_REDIS_REST_URL &&
@@ -592,3 +615,4 @@ export default {
     return json({ error: "NOT_FOUND" }, 404);
   }
 };
+

@@ -1,0 +1,63 @@
+Append this to apps/web/app/globals.css:
+
+.evalTable {
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+}
+
+.evalRow {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) 100px 100px 130px;
+  gap: 14px;
+  padding: 13px 14px;
+  align-items: center;
+  border-bottom: 1px solid #eeeeF3;
+  font-size: 12px;
+}
+
+.evalHead {
+  background: #f8f8fc;
+  color: var(--muted);
+  font-weight: 750;
+}
+
+.evalHero {
+  margin-top: 18px;
+  text-align: center;
+  padding: 42px 20px;
+  background:
+    radial-gradient(circle at center, rgba(94,63,225,.10), transparent 45%),
+    white;
+}
+
+.evalHero h2 {
+  margin: 8px 0 0;
+  font-size: 72px;
+  line-height: 1;
+  color: var(--green);
+}
+
+.evalHero > div > strong {
+  display: block;
+  margin-top: 8px;
+  font-size: 18px;
+}
+
+.evalHero p {
+  max-width: 520px;
+  margin: 10px auto 0;
+  color: var(--muted);
+  line-height: 1.6;
+  font-size: 12px;
+}
+
+@media (max-width: 760px) {
+  .evalRow {
+    grid-template-columns: 1fr 70px 70px;
+  }
+
+  .evalRow > span:last-child {
+    display: none;
+  }
+}
