@@ -1,3 +1,4 @@
+import { handleWhatsappRoutes } from "./whatsapp/routes";
 import { handleSessionRoutes } from "./sessions/routes";
 import { handleCommerceRoutes } from "./commerce/routes";
 import { handleWalletRoutes } from "./wallets/routes";
@@ -104,6 +105,9 @@ export default {
 
     const sessionRouteResponse = await handleSessionRoutes(request, env, url);
     if (sessionRouteResponse) return sessionRouteResponse;
+
+    const whatsappRouteResponse = await handleWhatsappRoutes(request, env, url);
+    if (whatsappRouteResponse) return whatsappRouteResponse;
 
     if (
       request.method === "GET" &&
@@ -611,7 +615,7 @@ export default {
       return json({
         service: "intentlock-worker",
         status: "ok",
-        version: "v10.4",
+        version: "v10.5",
         databaseConfigured: Boolean(env.DATABASE_URL),
         redisConfigured: Boolean(
           env.UPSTASH_REDIS_REST_URL &&
