@@ -6,7 +6,9 @@ import type { ReactNode } from "react";
 
 const links = [
   { href: "/", label: "Dashboard", icon: "⌂" },
-  { href: "/new-purchase", label: "New Purchase", icon: "✦" },
+  { href: "/new-purchase", label: "Autonomous Purchase", icon: "✦" },
+  { href: "/wallets", label: "Intent Wallets", icon: "◈" },
+  { href: "/commerce", label: "Marketplace", icon: "⌕" },
   { href: "/security-lab", label: "Security Lab", icon: "⚠" },
   { href: "/evals", label: "Evaluations", icon: "▦" },
   { href: "/audit", label: "Audit Log", icon: "▤" },

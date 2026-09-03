@@ -1,3 +1,6 @@
+import { handleSessionRoutes } from "./sessions/routes";
+import { handleCommerceRoutes } from "./commerce/routes";
+import { handleWalletRoutes } from "./wallets/routes";
 ﻿import { runFullEvalSuite } from "./evals/run";
 import { routeAgentRequest } from "agents";
 import {
@@ -92,6 +95,15 @@ export default {
     }
 
     const url = new URL(request.url);
+
+    const walletRouteResponse = await handleWalletRoutes(request, env, url);
+    if (walletRouteResponse) return walletRouteResponse;
+
+    const commerceRouteResponse = await handleCommerceRoutes(request, env, url);
+    if (commerceRouteResponse) return commerceRouteResponse;
+
+    const sessionRouteResponse = await handleSessionRoutes(request, env, url);
+    if (sessionRouteResponse) return sessionRouteResponse;
 
     if (
       request.method === "GET" &&
@@ -599,7 +611,7 @@ export default {
       return json({
         service: "intentlock-worker",
         status: "ok",
-        version: "v9",
+        version: "v10.4",
         databaseConfigured: Boolean(env.DATABASE_URL),
         redisConfigured: Boolean(
           env.UPSTASH_REDIS_REST_URL &&
