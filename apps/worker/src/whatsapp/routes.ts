@@ -1,7 +1,15 @@
 import type {WahaWebhook} from "./types";
 import {claimWebhookEvent} from "./repository";
 import {handleWhatsappMessage} from "./service";
-import {verifyWahaWebhookHmac} from "./waha-client";
+import {verifyWahaWebhookHmac,sendWahaText} from "./waha-client";
+import {
+  isWhatsappChatAuthorized,
+  authorizeWhatsappChat,
+  revokeWhatsappChat,
+  extractPairingCode,
+  pairingCodeMatches,
+  isWhatsappStopCommand
+} from "./access";
 
 const jsonHeaders={"content-type":"application/json; charset=utf-8"};
 const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:jsonHeaders});
@@ -18,6 +26,7 @@ type Env={
   WAHA_BASE_URL?:string;
   WAHA_API_KEY?:string;
   WAHA_WEBHOOK_SECRET?:string;
+  WAHA_PAIRING_CODE?:string;
 
   UPSTASH_REDIS_REST_URL?:string;
   UPSTASH_REDIS_REST_TOKEN?:string;
@@ -40,7 +49,9 @@ export async function handleWhatsappRoutes(
         env.WAHA_WEBHOOK_SECRET
       ),
       webhookPath:"/webhooks/waha",
-      channel:"WHATSAPP"
+      channel:"WHATSAPP",
+      inboundAccess:"PAIRING_REQUIRED",
+      pairingConfigured:Boolean(env.WAHA_PAIRING_CODE)
     });
   }
 
@@ -84,9 +95,79 @@ export async function handleWhatsappRoutes(
   if(!chatId) return json({ok:true,ignored:"missing_chat"});
   if(!body) return json({ok:true,ignored:"non_text_or_empty"});
 
-  // Keep this hackathon channel focused on 1:1 chats.
+  // Keep this channel focused on 1:1 chats.
   if(chatId.endsWith("@g.us") || chatId.endsWith("@newsletter"))
     return json({ok:true,ignored:"non_direct_chat"});
+
+  // V10.8: silent-by-default inbound access.
+  // Unauthorized chats are not persisted and receive no bot response.
+  const authorized=await isWhatsappChatAuthorized(
+    env.DATABASE_URL,
+    chatId
+  );
+
+  if(!authorized){
+    const supplied=extractPairingCode(body);
+
+    if(
+      !pairingCodeMatches(
+        supplied,
+        env.WAHA_PAIRING_CODE
+      )
+    ){
+      return json({
+        ok:true,
+        ignored:"unauthorized_chat"
+      });
+    }
+
+    await authorizeWhatsappChat(
+      env.DATABASE_URL,
+      chatId,
+      "WhatsApp paired user"
+    );
+
+    await sendWahaText({
+      baseUrl:env.WAHA_BASE_URL,
+      apiKey:env.WAHA_API_KEY,
+      session:String(event.session??"default"),
+      chatId,
+      text:
+`🔐 *IntentLock access enabled*
+
+This WhatsApp chat is now authorized for delegated commerce.
+
+Reply *HELP* to begin.
+
+To revoke access later, send:
+*INTENTLOCK STOP*`
+    });
+
+    return json({
+      ok:true,
+      paired:true
+    });
+  }
+
+  if(isWhatsappStopCommand(body)){
+    await sendWahaText({
+      baseUrl:env.WAHA_BASE_URL,
+      apiKey:env.WAHA_API_KEY,
+      session:String(event.session??"default"),
+      chatId,
+      text:"🔒 IntentLock access revoked for this WhatsApp chat."
+    });
+
+    await revokeWhatsappChat(
+      env.DATABASE_URL,
+      chatId
+    );
+
+    return json({
+      ok:true,
+      revoked:true
+    });
+  }
 
   const eventId=String(
     event.id ??

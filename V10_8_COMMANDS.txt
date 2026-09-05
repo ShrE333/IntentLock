@@ -1,0 +1,17 @@
+cd D:\IntentLock
+node .\apply-v10-8.mjs
+npm test
+
+# Run apps/worker/db/v10_8_authorize.sql in Neon first.
+
+$AUTH_SECRET = ([guid]::NewGuid().ToString("N") + [guid]::NewGuid().ToString("N"))
+$ADMIN_KEY = ([guid]::NewGuid().ToString("N") + [guid]::NewGuid().ToString("N"))
+$PAIR_CODE = [guid]::NewGuid().ToString("N").Substring(0,16)
+
+cd D:\IntentLock\apps\worker
+npx wrangler secret put INTENTLOCK_AUTH_SIGNING_SECRET
+npx wrangler secret put INTENTLOCK_ADMIN_KEY
+npx wrangler secret put WAHA_PAIRING_CODE
+npx wrangler deploy
+
+Invoke-RestMethod "https://intentlock-worker.shdixit10.workers.dev/v1/status" | ConvertTo-Json

@@ -1,3 +1,4 @@
+import { handleAuthorizeRoutes } from "./authorize/routes";
 import { handleSessionPaymentRoutes } from "./session-payments/routes";
 import { handleWhatsappRoutes } from "./whatsapp/routes";
 import { handleSessionRoutes } from "./sessions/routes";
@@ -97,6 +98,14 @@ export default {
     }
 
     const url = new URL(request.url);
+
+    // V10.8 external authorization control plane.
+    const authorizeRouteResponse = await handleAuthorizeRoutes(
+      request,
+      env,
+      url
+    );
+    if (authorizeRouteResponse) return authorizeRouteResponse;
 
     // V10.6 must run before the legacy V7 Razorpay webhook.
     // It handles PurchaseSession-linked payments and returns null for legacy payments.
@@ -625,7 +634,7 @@ export default {
       return json({
         service: "intentlock-worker",
         status: "ok",
-        version: "v10.7",
+        version: "v10.8",
         databaseConfigured: Boolean(env.DATABASE_URL),
         redisConfigured: Boolean(
           env.UPSTASH_REDIS_REST_URL &&
