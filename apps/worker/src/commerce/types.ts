@@ -28,7 +28,7 @@ export type CommerceSearchQuery = {
 export type CommerceConnectorInfo = {
   id: string;
   name: string;
-  kind: "DEMO" | "HTTP_JSON" | "AMAZON_CREATORS" | "INDIAMART";
+  kind: "DEMO" | "HTTP_JSON" | "SHOPIFY" | "AMAZON_CREATORS" | "INDIAMART";
   enabled: boolean;
   description: string;
 };

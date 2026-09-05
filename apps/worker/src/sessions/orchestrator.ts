@@ -11,6 +11,10 @@ type Env={
   DATABASE_URL:string;
   APPROVAL_SIGNING_SECRET?:string;
   COMMERCE_CATALOG_URL?:string;
+  SHOPIFY_STORE_DOMAIN?:string;
+  SHOPIFY_STOREFRONT_PUBLIC_TOKEN?:string;
+  SHOPIFY_STOREFRONT_PRIVATE_TOKEN?:string;
+  SHOPIFY_STOREFRONT_API_VERSION?:string;
 };
 
 export async function runPurchaseSession(env:Env,sessionId:string){

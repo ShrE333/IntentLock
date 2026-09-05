@@ -1,3 +1,4 @@
+import { handleSessionPaymentRoutes } from "./session-payments/routes";
 import { handleWhatsappRoutes } from "./whatsapp/routes";
 import { handleSessionRoutes } from "./sessions/routes";
 import { handleCommerceRoutes } from "./commerce/routes";
@@ -96,6 +97,15 @@ export default {
     }
 
     const url = new URL(request.url);
+
+    // V10.6 must run before the legacy V7 Razorpay webhook.
+    // It handles PurchaseSession-linked payments and returns null for legacy payments.
+    const sessionPaymentRouteResponse = await handleSessionPaymentRoutes(
+      request.clone(),
+      env,
+      url
+    );
+    if (sessionPaymentRouteResponse) return sessionPaymentRouteResponse;
 
     const walletRouteResponse = await handleWalletRoutes(request, env, url);
     if (walletRouteResponse) return walletRouteResponse;
@@ -615,7 +625,7 @@ export default {
       return json({
         service: "intentlock-worker",
         status: "ok",
-        version: "v10.5",
+        version: "v10.7",
         databaseConfigured: Boolean(env.DATABASE_URL),
         redisConfigured: Boolean(
           env.UPSTASH_REDIS_REST_URL &&

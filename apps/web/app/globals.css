@@ -1603,3 +1603,34 @@ button:disabled {
 .candidateDecision{margin-top:10px;padding:8px 9px;border-radius:8px;display:flex;justify-content:space-between;gap:8px}.candidateDecision strong,.candidateDecision span{font-size:7px}.candidateDecision.allow{background:var(--green-bg);color:var(--green)}.candidateDecision.step_up{background:var(--orange-bg);color:var(--orange)}.candidateDecision.block{background:var(--red-bg);color:var(--red)}.selectedFlag{margin-top:8px;font-size:7px;font-weight:900;color:#5d43d8}
 .selectedPurchaseCard,.sessionStepUp,.readyToPay{padding:18px;border:1px solid #dedfe8;border-radius:14px;background:#fff;display:flex;justify-content:space-between;gap:20px;align-items:center}.selectedPurchaseCard h2,.sessionStepUp h2,.readyToPay h2{margin:5px 0;font-size:19px}.selectedPurchaseCard p,.sessionStepUp p,.readyToPay p{margin:0;color:var(--muted);font-size:9px}.selectedPrice{font-size:26px;font-weight:900}.sessionStepUp{margin-top:10px;border-color:#ead8a3;background:#fffdf5}.sessionStepActions{display:flex;gap:8px;flex-wrap:wrap;justify-content:flex-end}.readyToPay{margin-top:10px;border-color:#ccebd5;background:#f5fff8}.readyToPay h2{color:var(--green)}.pipelineNext{text-align:right;color:var(--muted);font-size:7px;line-height:1.6}.pipelineNext strong{color:var(--ink);font-size:9px}.sessionRejected{margin-top:10px;padding:14px;border:1px solid #f0cccc;border-radius:12px;background:#fff5f5}.sessionRejected strong,.sessionRejected span{display:block}.sessionRejected strong{color:var(--red);font-size:10px}.sessionRejected span{margin-top:5px;color:var(--muted);font-size:8px}
 @media(max-width:1100px){.purchaseSessionGrid{grid-template-columns:1fr}.sessionCandidates{grid-template-columns:repeat(2,1fr)}}@media(max-width:760px){.sessionFormGrid,.authorityBar,.sessionCandidates{grid-template-columns:1fr}.selectedPurchaseCard,.sessionStepUp,.readyToPay{align-items:flex-start;flex-direction:column}.sessionStepActions{justify-content:flex-start}.pipelineNext{text-align:left}.sessionStateRow{grid-template-columns:1fr}.sessionStateRow strong{text-align:left}}
+
+/* INTENTLOCK V10.6 — PAYMENT + PROOF */
+.paymentPendingCard,.capturedProofCard{
+  margin-top:10px;padding:18px;border-radius:14px;display:flex;
+  justify-content:space-between;gap:20px;align-items:center
+}
+.paymentPendingCard{border:1px solid #d8d1ff;background:#faf8ff}
+.capturedProofCard{border:1px solid #c8ead3;background:#f4fff7}
+.paymentPendingCard h2,.capturedProofCard h2{margin:5px 0;font-size:19px}
+.paymentPendingCard p,.capturedProofCard p{margin:0;color:var(--muted);font-size:9px;line-height:1.55}
+.paymentPendingActions,.capturedActions{display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:flex-end}
+.capturedActions>strong{font-size:24px;letter-spacing:-.04em}
+
+.proofPage{display:grid;gap:16px}
+.proofHero{padding:22px;border:1px solid #cbe9d3;border-radius:16px;background:linear-gradient(135deg,#f5fff7,#fff);display:flex;justify-content:space-between;gap:20px;align-items:center}
+.proofHero h2{margin:6px 0;font-size:22px}.proofHero p{margin:0;color:var(--muted);font-size:10px;max-width:700px;line-height:1.6}
+.proofStatus{text-align:right}.proofStatus strong,.proofStatus span{display:block}.proofStatus strong{color:var(--green);font-size:18px}.proofStatus span{margin-top:5px;color:var(--muted);font-size:8px}
+.proofGrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.proofCard{padding:16px;border:1px solid #e2e3eb;border-radius:13px;background:#fff}.proofCard h3{margin:0 0 10px;font-size:13px}
+.proofRow{display:grid;grid-template-columns:145px 1fr;gap:10px;padding:8px 0;border-bottom:1px solid #f0f1f5}.proofRow:last-child{border-bottom:0}.proofRow span{font-size:8px;color:var(--muted)}.proofRow strong{text-align:right;font-size:8px;overflow-wrap:anywhere}
+.proofCryptography{padding:17px;border:1px solid #e0e1ea;border-radius:14px;background:#fff}
+.cryptoRow{display:grid;grid-template-columns:180px 1fr;gap:12px;align-items:start;padding:10px 0;border-bottom:1px solid #f0f1f5}.cryptoRow:last-child{border-bottom:0}.cryptoRow span{font-size:8px;color:var(--muted);font-weight:750}.cryptoRow code{padding:8px;border-radius:8px;background:#171827;color:#d9d7ff;font-size:8px;overflow-wrap:anywhere;white-space:normal}
+.proofChecks{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.proofCheck{padding:11px;border-radius:9px;display:flex;gap:8px;align-items:center}.proofCheck.ok{background:var(--green-bg);color:var(--green)}.proofCheck.bad{background:var(--red-bg);color:var(--red)}.proofCheck span{font-size:11px}.proofCheck strong{font-size:8px}
+@media(max-width:760px){
+  .paymentPendingCard,.capturedProofCard,.proofHero{align-items:flex-start;flex-direction:column}
+  .paymentPendingActions,.capturedActions{justify-content:flex-start}
+  .proofGrid,.proofChecks{grid-template-columns:1fr}
+  .proofRow,.cryptoRow{grid-template-columns:1fr}
+  .proofRow strong{text-align:left}
+  .proofStatus{text-align:left}
+}

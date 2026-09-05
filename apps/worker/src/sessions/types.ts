@@ -19,8 +19,17 @@ export type PurchaseSession = {
   stepUpRequestId:string|null;
   authorizationId:string|null;
 
+  quoteHash:string|null;
+  paymentLinkUrl:string|null;
+  paymentIdempotencyKey:string|null;
+
   razorpayPaymentLinkId:string|null;
   razorpayPaymentId:string|null;
+
+  capturedAmount:number|null;
+  capturedCurrency:string|null;
+  capturedAt:string|null;
+
   proofReceiptId:string|null;
 
   createdAt:string;

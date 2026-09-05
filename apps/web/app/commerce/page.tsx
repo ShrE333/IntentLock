@@ -62,8 +62,10 @@ export default function CommercePage(){
       setWallets(w.wallets);
       setConnectors(c.connectors);
       if(w.wallets[0]) setWalletId(w.wallets[0].walletId);
-      const firstEnabled=c.connectors.find(x=>x.enabled);
-      if(firstEnabled) setConnectorId(firstEnabled.id);
+      const preferred=c.connectors.find(
+        x=>x.enabled && x.id==="shopify-storefront"
+      ) ?? c.connectors.find(x=>x.enabled);
+      if(preferred) setConnectorId(preferred.id);
     }catch(e){
       setError(e instanceof Error?e.message:String(e));
     }

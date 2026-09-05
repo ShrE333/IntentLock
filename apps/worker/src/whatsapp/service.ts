@@ -7,13 +7,23 @@ import {
 } from "./repository";
 import {parseWhatsappCommand} from "./commands";
 import {sendWahaText} from "./waha-client";
+import {createPaymentLinkForSession} from "../session-payments/service";
 
 type Env={
   DATABASE_URL:string;
   APPROVAL_SIGNING_SECRET?:string;
   COMMERCE_CATALOG_URL?:string;
+  SHOPIFY_STORE_DOMAIN?:string;
+  SHOPIFY_STOREFRONT_PUBLIC_TOKEN?:string;
+  SHOPIFY_STOREFRONT_PRIVATE_TOKEN?:string;
+  SHOPIFY_STOREFRONT_API_VERSION?:string;
   WAHA_BASE_URL:string;
   WAHA_API_KEY:string;
+  UPSTASH_REDIS_REST_URL?:string;
+  UPSTASH_REDIS_REST_TOKEN?:string;
+  RAZORPAY_KEY_ID?:string;
+  RAZORPAY_KEY_SECRET?:string;
+  RAZORPAY_WEBHOOK_SECRET?:string;
 };
 
 async function reply(
@@ -215,7 +225,11 @@ Amount: ${session.selectedProduct?`₹${session.selectedProduct.price.toLocaleSt
       {
         DATABASE_URL:env.DATABASE_URL,
         APPROVAL_SIGNING_SECRET:env.APPROVAL_SIGNING_SECRET,
-        COMMERCE_CATALOG_URL:env.COMMERCE_CATALOG_URL
+        COMMERCE_CATALOG_URL:env.COMMERCE_CATALOG_URL,
+        SHOPIFY_STORE_DOMAIN:env.SHOPIFY_STORE_DOMAIN,
+        SHOPIFY_STOREFRONT_PUBLIC_TOKEN:env.SHOPIFY_STOREFRONT_PUBLIC_TOKEN,
+        SHOPIFY_STOREFRONT_PRIVATE_TOKEN:env.SHOPIFY_STOREFRONT_PRIVATE_TOKEN,
+        SHOPIFY_STOREFRONT_API_VERSION:env.SHOPIFY_STOREFRONT_API_VERSION
       },
       state.activeSessionId,
       action
@@ -230,18 +244,39 @@ Money movement remains disabled.`);
       return;
     }
 
+    const payment=await createPaymentLinkForSession(
+      {
+        DATABASE_URL:env.DATABASE_URL,
+        APPROVAL_SIGNING_SECRET:env.APPROVAL_SIGNING_SECRET,
+        UPSTASH_REDIS_REST_URL:env.UPSTASH_REDIS_REST_URL,
+        UPSTASH_REDIS_REST_TOKEN:env.UPSTASH_REDIS_REST_TOKEN,
+        RAZORPAY_KEY_ID:env.RAZORPAY_KEY_ID,
+        RAZORPAY_KEY_SECRET:env.RAZORPAY_KEY_SECRET,
+        RAZORPAY_WEBHOOK_SECRET:env.RAZORPAY_WEBHOOK_SECRET,
+        SHOPIFY_STORE_DOMAIN:env.SHOPIFY_STORE_DOMAIN,
+        SHOPIFY_STOREFRONT_PUBLIC_TOKEN:env.SHOPIFY_STOREFRONT_PUBLIC_TOKEN,
+        SHOPIFY_STOREFRONT_PRIVATE_TOKEN:env.SHOPIFY_STOREFRONT_PRIVATE_TOKEN,
+        SHOPIFY_STOREFRONT_API_VERSION:env.SHOPIFY_STOREFRONT_API_VERSION,
+        WAHA_BASE_URL:env.WAHA_BASE_URL,
+        WAHA_API_KEY:env.WAHA_API_KEY
+      },
+      result.session!.sessionId
+    );
+
     await reply(env,input.chatId,input.wahaSession,
 `✅ *Authority granted*
 
 Session: ${result.session?.sessionId}
 Resolution: ${String(result.result.decision).replaceAll("_"," ")}
-Status: *${result.session?.status}*
+
+💳 *Razorpay checkout ready*
+${payment.paymentLink?.shortUrl}
 
 ${action==="ALLOW_ONCE"
-  ? "A signed exact-quote one-time authorization is now attached to this PurchaseSession."
-  : `The autonomous limit was raised to ₹${Number(result.result.newAutoBuyLimit).toLocaleString("en-IN")}.`}
+  ? "The exact one-time authorization will be consumed by this checkout."
+  : `The autonomous limit is now ₹${Number(result.result.newAutoBuyLimit).toLocaleString("en-IN")}.`}
 
-Next pipeline edge: Redis → Razorpay → verified webhook.`);
+IntentLock will mark the session CAPTURED only after Razorpay's verified webhook.`);
     return;
   }
 
@@ -304,7 +339,11 @@ Searching marketplace and evaluating every candidate against your authority…`)
       {
         DATABASE_URL:env.DATABASE_URL,
         APPROVAL_SIGNING_SECRET:env.APPROVAL_SIGNING_SECRET,
-        COMMERCE_CATALOG_URL:env.COMMERCE_CATALOG_URL
+        COMMERCE_CATALOG_URL:env.COMMERCE_CATALOG_URL,
+        SHOPIFY_STORE_DOMAIN:env.SHOPIFY_STORE_DOMAIN,
+        SHOPIFY_STOREFRONT_PUBLIC_TOKEN:env.SHOPIFY_STOREFRONT_PUBLIC_TOKEN,
+        SHOPIFY_STOREFRONT_PRIVATE_TOKEN:env.SHOPIFY_STOREFRONT_PRIVATE_TOKEN,
+        SHOPIFY_STOREFRONT_API_VERSION:env.SHOPIFY_STOREFRONT_API_VERSION
       },
       purchase.sessionId
     );
@@ -312,6 +351,25 @@ Searching marketplace and evaluating every candidate against your authority…`)
     const lines=run.candidates.slice(0,6).map(candidateLine);
 
     if(run.session?.status==="READY_TO_PAY"){
+      const payment=await createPaymentLinkForSession(
+        {
+          DATABASE_URL:env.DATABASE_URL,
+          APPROVAL_SIGNING_SECRET:env.APPROVAL_SIGNING_SECRET,
+          UPSTASH_REDIS_REST_URL:env.UPSTASH_REDIS_REST_URL,
+          UPSTASH_REDIS_REST_TOKEN:env.UPSTASH_REDIS_REST_TOKEN,
+          RAZORPAY_KEY_ID:env.RAZORPAY_KEY_ID,
+          RAZORPAY_KEY_SECRET:env.RAZORPAY_KEY_SECRET,
+          RAZORPAY_WEBHOOK_SECRET:env.RAZORPAY_WEBHOOK_SECRET,
+          SHOPIFY_STORE_DOMAIN:env.SHOPIFY_STORE_DOMAIN,
+          SHOPIFY_STOREFRONT_PUBLIC_TOKEN:env.SHOPIFY_STOREFRONT_PUBLIC_TOKEN,
+          SHOPIFY_STOREFRONT_PRIVATE_TOKEN:env.SHOPIFY_STOREFRONT_PRIVATE_TOKEN,
+          SHOPIFY_STOREFRONT_API_VERSION:env.SHOPIFY_STOREFRONT_API_VERSION,
+          WAHA_BASE_URL:env.WAHA_BASE_URL,
+          WAHA_API_KEY:env.WAHA_API_KEY
+        },
+        run.session.sessionId
+      );
+
       await reply(env,input.chatId,input.wahaSession,
 `🧠 *Agent evaluation*
 
@@ -321,8 +379,11 @@ ${lines.join("\n")}
 ${run.session.selectedProduct?.title}
 ₹${run.session.selectedProduct?.price.toLocaleString("en-IN")}
 
-✅ *READY TO PAY*
-The candidate is inside delegated authority.
+💳 *Razorpay checkout ready*
+${payment.paymentLink?.shortUrl}
+
+IntentLock has not marked the purchase complete yet.
+Completion happens only after the verified Razorpay webhook.
 
 Session: ${run.session.sessionId}`);
       return;

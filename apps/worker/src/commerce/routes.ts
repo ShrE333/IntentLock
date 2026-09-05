@@ -14,6 +14,10 @@ const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,
 type Env={
   DATABASE_URL?:string;
   COMMERCE_CATALOG_URL?:string;
+  SHOPIFY_STORE_DOMAIN?:string;
+  SHOPIFY_STOREFRONT_PUBLIC_TOKEN?:string;
+  SHOPIFY_STOREFRONT_PRIVATE_TOKEN?:string;
+  SHOPIFY_STOREFRONT_API_VERSION?:string;
 };
 
 export async function handleCommerceRoutes(
@@ -27,6 +31,37 @@ export async function handleCommerceRoutes(
 
   if(request.method==="GET" && url.pathname==="/api/commerce/connectors"){
     return json({connectors:connectorStatus(env)});
+  }
+
+  if(request.method==="GET" && url.pathname==="/api/commerce/shopify/status"){
+    const connector=getCommerceConnectors(env)
+      .find(c=>c.info().id==="shopify-storefront");
+
+    if(!connector){
+      return json({
+        configured:false,
+        reachable:false,
+        connector:"shopify-storefront"
+      });
+    }
+
+    try{
+      const sample=await connector.search({query:"",limit:1});
+
+      return json({
+        configured:true,
+        reachable:true,
+        connector:connector.info(),
+        sampleProduct:sample[0]??null
+      });
+    }catch(error){
+      return json({
+        configured:true,
+        reachable:false,
+        connector:connector.info(),
+        message:error instanceof Error?error.message:String(error)
+      },502);
+    }
   }
 
   if(request.method==="POST" && url.pathname==="/api/commerce/search"){

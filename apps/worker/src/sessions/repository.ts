@@ -2,7 +2,7 @@ import {neon} from "@neondatabase/serverless";
 import type {CommerceProduct} from "../commerce/types";
 import type {PurchaseSession,SessionStatus,SessionEvent} from "./types";
 
-const iso=(v:unknown)=>new Date(String(v)).toISOString();
+const iso=(v:unknown)=>v?new Date(String(v)).toISOString():null;
 const nullable=(v:unknown)=>v==null?null:String(v);
 
 function mapSession(r:any):PurchaseSession{
@@ -13,16 +13,29 @@ function mapSession(r:any):PurchaseSession{
     connectorId:String(r.connector_id),
     userPrompt:String(r.user_prompt),
     status:String(r.status) as SessionStatus,
+
     selectedProduct:(r.selected_product??null) as CommerceProduct|null,
     selectedDecision:(r.selected_decision??null) as "ALLOW"|"STEP_UP"|"BLOCK"|null,
+
     stepUpRequestId:nullable(r.step_up_request_id),
     authorizationId:nullable(r.authorization_id),
+
+    quoteHash:nullable(r.quote_hash),
+    paymentLinkUrl:nullable(r.payment_link_url),
+    paymentIdempotencyKey:nullable(r.payment_idempotency_key),
+
     razorpayPaymentLinkId:nullable(r.razorpay_payment_link_id),
     razorpayPaymentId:nullable(r.razorpay_payment_id),
+
+    capturedAmount:r.captured_amount==null?null:Number(r.captured_amount),
+    capturedCurrency:nullable(r.captured_currency),
+    capturedAt:iso(r.captured_at),
+
     proofReceiptId:nullable(r.proof_receipt_id),
-    createdAt:iso(r.created_at),
-    updatedAt:iso(r.updated_at),
-    completedAt:r.completed_at?iso(r.completed_at):null
+
+    createdAt:new Date(String(r.created_at)).toISOString(),
+    updatedAt:new Date(String(r.updated_at)).toISOString(),
+    completedAt:iso(r.completed_at)
   };
 }
 
@@ -33,7 +46,7 @@ function mapEvent(r:any):SessionEvent{
     sessionId:String(r.session_id),
     eventType:String(r.event_type),
     payload:(r.payload??{}) as Record<string,unknown>,
-    occurredAt:iso(r.occurred_at)
+    occurredAt:new Date(String(r.occurred_at)).toISOString()
   };
 }
 

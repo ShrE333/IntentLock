@@ -1,0 +1,11 @@
+cd D:\IntentLock
+node .\apply-v10-7.mjs
+npm test
+
+cd D:\IntentLock\apps\worker
+npx wrangler secret put SHOPIFY_STORE_DOMAIN
+npx wrangler secret put SHOPIFY_STOREFRONT_PRIVATE_TOKEN
+npx wrangler secret put SHOPIFY_STOREFRONT_API_VERSION
+npx wrangler deploy
+
+Invoke-RestMethod "https://intentlock-worker.shdixit10.workers.dev/api/commerce/shopify/status" | ConvertTo-Json -Depth 8

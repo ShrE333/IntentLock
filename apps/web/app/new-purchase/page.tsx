@@ -52,6 +52,19 @@ type Session={
   selectedDecision:"ALLOW"|"STEP_UP"|"BLOCK"|null;
   stepUpRequestId:string|null;
   authorizationId:string|null;
+
+  quoteHash:string|null;
+  paymentLinkUrl:string|null;
+  paymentIdempotencyKey:string|null;
+
+  razorpayPaymentLinkId:string|null;
+  razorpayPaymentId:string|null;
+
+  capturedAmount:number|null;
+  capturedCurrency:string|null;
+  capturedAt:string|null;
+
+  proofReceiptId:string|null;
 };
 
 type Event={
@@ -85,6 +98,8 @@ export default function AutonomousPurchasePage(){
   const [busy,setBusy]=useState("");
   const [error,setError]=useState("");
   const [stepResult,setStepResult]=useState<any>(null);
+  const [paymentLink,setPaymentLink]=useState<string>("");
+  const [paymentBusy,setPaymentBusy]=useState(false);
 
   const wallet=useMemo(
     ()=>wallets.find(w=>w.walletId===walletId)??null,
@@ -101,8 +116,10 @@ export default function AutonomousPurchasePage(){
       setConnectors(c.connectors.filter(x=>x.enabled));
 
       if(w.wallets[0]) setWalletId(w.wallets[0].walletId);
-      const first=c.connectors.find(x=>x.enabled);
-      if(first) setConnectorId(first.id);
+      const preferred=c.connectors.find(
+        x=>x.enabled && x.id==="shopify-storefront"
+      ) ?? c.connectors.find(x=>x.enabled);
+      if(preferred) setConnectorId(preferred.id);
     }catch(e){
       setError(e instanceof Error?e.message:String(e));
     }
@@ -120,6 +137,7 @@ export default function AutonomousPurchasePage(){
     setEvents([]);
     setCandidates([]);
     setStepResult(null);
+    setPaymentLink("");
 
     try{
       const created=await postJson<{session:Session;events:Event[]}>(
@@ -184,6 +202,56 @@ export default function AutonomousPurchasePage(){
       setError(e instanceof Error?e.message:String(e));
     }finally{
       setBusy("");
+    }
+  }
+
+
+  async function refreshSession(){
+    if(!session) return;
+    try{
+      const r=await getJson<{session:Session;events:Event[]}>(
+        `/api/sessions/${encodeURIComponent(session.sessionId)}`
+      );
+      setSession(r.session);
+      setEvents(r.events);
+      if(r.session.paymentLinkUrl) setPaymentLink(r.session.paymentLinkUrl);
+      if(r.session.status==="CAPTURED") await load();
+    }catch{}
+  }
+
+  useEffect(()=>{
+    if(!session || session.status!=="PAYMENT_PENDING") return;
+    const timer=setInterval(()=>{refreshSession();},3000);
+    return ()=>clearInterval(timer);
+  },[session?.sessionId,session?.status]);
+
+  async function createPayment(){
+    if(!session) return;
+
+    setPaymentBusy(true);
+    setError("");
+
+    try{
+      const r=await postJson<{
+        paymentLink:{
+          shortUrl:string;
+          status:string;
+        }|null;
+      }>(
+        `/api/sessions/${encodeURIComponent(session.sessionId)}/payment-link`,
+        {}
+      );
+
+      if(!r.paymentLink?.shortUrl)
+        throw new Error("Razorpay Payment Link was not returned.");
+
+      setPaymentLink(r.paymentLink.shortUrl);
+      await refreshSession();
+      window.open(r.paymentLink.shortUrl,"_blank","noopener,noreferrer");
+    }catch(e){
+      setError(e instanceof Error?e.message:String(e));
+    }finally{
+      setPaymentBusy(false);
     }
   }
 
@@ -252,7 +320,9 @@ export default function AutonomousPurchasePage(){
           <State label="Wallet" value={wallet?.name??session.walletId}/>
           <State label="Connector" value={session.connectorId}/>
           <State label="Decision" value={session.selectedDecision??"PENDING"}/>
-          <State label="Authorization" value={session.authorizationId??"Not issued"}/>
+          <State label="Authorization" value={session.authorizationId??"Wallet policy"}/>
+          <State label="Payment" value={session.razorpayPaymentId??session.razorpayPaymentLinkId??"Not started"}/>
+          <State label="Proof Receipt" value={session.proofReceiptId??"Not generated"}/>
         </div>}
       </article>
     </section>
@@ -362,13 +432,60 @@ export default function AutonomousPurchasePage(){
           <h2>READY TO PAY</h2>
           <p>
             {session.authorizationId
-              ? "Human step-up authority is attached to this PurchaseSession."
-              : "The selected candidate is inside autonomous wallet authority."}
+              ? "Signed one-time authority is attached. IntentLock will consume it exactly once when checkout starts."
+              : "The selected candidate is still inside autonomous wallet authority at execution time."}
           </p>
         </div>
-        <div className="pipelineNext">
-          NEXT PIPELINE EDGE<br/>
-          <strong>Redis → Razorpay → Webhook</strong>
+        <button
+          className="button buttonPrimary"
+          onClick={createPayment}
+          disabled={paymentBusy}
+        >
+          {paymentBusy?"Creating Razorpay Link…":`Create Razorpay Checkout · ₹${session.selectedProduct.price.toLocaleString("en-IN")}`}
+        </button>
+      </article>}
+
+      {session.status==="PAYMENT_PENDING" && <article className="paymentPendingCard">
+        <div>
+          <span className="miniLabel">PAYMENT EXECUTION</span>
+          <h2>WAITING FOR RAZORPAY</h2>
+          <p>
+            IntentLock has created exactly one checkout. The purchase is not complete until the signed Razorpay webhook arrives.
+          </p>
+        </div>
+        <div className="paymentPendingActions">
+          {(paymentLink||session.paymentLinkUrl) && <a
+            className="button buttonPrimary"
+            href={paymentLink||session.paymentLinkUrl||"#"}
+            target="_blank"
+            rel="noreferrer"
+          >
+            Open Razorpay
+          </a>}
+          <button className="button buttonSecondary" onClick={refreshSession}>
+            Refresh Status
+          </button>
+        </div>
+      </article>}
+
+      {session.status==="CAPTURED" && <article className="capturedProofCard">
+        <div>
+          <span className="miniLabel">VERIFIED PURCHASE</span>
+          <h2>PAYMENT CAPTURED</h2>
+          <p>
+            Razorpay webhook verified · wallet authority debited once · tamper-evident proof generated.
+          </p>
+        </div>
+        <div className="capturedActions">
+          <strong>
+            ₹{Number(session.capturedAmount??session.selectedProduct.price).toLocaleString("en-IN")}
+          </strong>
+          <a
+            className="button buttonPrimary"
+            href={`/proof/${encodeURIComponent(session.sessionId)}`}
+          >
+            View Proof Receipt
+          </a>
         </div>
       </article>}
 
@@ -403,5 +520,21 @@ function EventDetails({event}:{event:Event}){
     return <p>{String(p.walletName)} · auto ≤₹{Number(p.autoBuyLimit).toLocaleString("en-IN")} · hard ≤₹{Number(p.maxSingleTransaction).toLocaleString("en-IN")}</p>;
   if(event.eventType==="USER_INTENT_RECEIVED")
     return <p>{String(p.prompt)}</p>;
+  if(event.eventType==="COMMERCE_QUOTE_REVALIDATED")
+    return <p>Live Shopify quote revalidated immediately before payment · ₹{Number(p.price).toLocaleString("en-IN")}.</p>;
+  if(event.eventType==="COMMERCE_QUOTE_CHANGED")
+    return <p>Live commerce facts changed after authorization · payment stopped and re-authorization required.</p>;
+  if(event.eventType==="PAYMENT_LINK_CREATED")
+    return <p>Razorpay checkout created · ₹{Number(p.amount).toLocaleString("en-IN")} · exact quote bound.</p>;
+  if(event.eventType==="ONE_TIME_AUTHORIZATION_CONSUMED")
+    return <p>Signed one-time authority consumed for this exact PurchaseSession.</p>;
+  if(event.eventType==="RAZORPAY_WEBHOOK_VERIFIED")
+    return <p>Razorpay webhook signature verified before processing.</p>;
+  if(event.eventType==="PAYMENT_CAPTURED")
+    return <p>Payment captured · ₹{Number(p.amount).toLocaleString("en-IN")}.</p>;
+  if(event.eventType==="WALLET_SPEND_APPLIED")
+    return <p>Wallet debited once · remaining authority ₹{Number(p.remainingAuthority).toLocaleString("en-IN")}.</p>;
+  if(event.eventType==="PROOF_RECEIPT_CREATED")
+    return <p>Cryptographic Proof Receipt generated · {String(p.receiptId)}.</p>;
   return <p>{pretty(event.eventType)}</p>;
 }
