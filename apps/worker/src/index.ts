@@ -1,3 +1,4 @@
+import { handlePurchaseQueue } from "./queue/purchase-jobs";
 import { handleAuthorizeRoutes } from "./authorize/routes";
 import { handleSessionPaymentRoutes } from "./session-payments/routes";
 import { handleWhatsappRoutes } from "./whatsapp/routes";
@@ -83,6 +84,10 @@ function approvalSecret(env: AppEnv): string {
 }
 
 export default {
+  async queue(batch:any, env:any, ctx:any) {
+    return handlePurchaseQueue(batch,env,ctx);
+  },
+
   async fetch(request: Request, rawEnv: Env): Promise<Response> {
     const env = rawEnv as AppEnv;
 
@@ -634,7 +639,7 @@ export default {
       return json({
         service: "intentlock-worker",
         status: "ok",
-        version: "v10.8",
+        version: "v10.8.5",
         databaseConfigured: Boolean(env.DATABASE_URL),
         redisConfigured: Boolean(
           env.UPSTASH_REDIS_REST_URL &&

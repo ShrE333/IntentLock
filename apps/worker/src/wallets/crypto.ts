@@ -12,10 +12,25 @@ function base64Url(bytes: Uint8Array) {
 }
 
 function decodeBase64Url(value: string) {
+  if (!/^[A-Za-z0-9_-]+$/.test(value))
+    throw new Error("INVALID_BASE64URL");
+
   const padded = value.replace(/-/g, "+").replace(/_/g, "/")
     + "=".repeat((4 - (value.length % 4)) % 4);
   const raw = atob(padded);
   return new Uint8Array([...raw].map(c => c.charCodeAt(0)));
+}
+
+function decodeCanonicalBase64Url(value: string) {
+  const decoded = decodeBase64Url(value);
+
+  // Base64URL without padding has unused low bits in some final characters.
+  // Different strings can otherwise decode to identical bytes.
+  // Re-encoding enforces exactly one textual representation per byte string.
+  if (base64Url(decoded) !== value)
+    throw new Error("NON_CANONICAL_BASE64URL");
+
+  return decoded;
 }
 
 export function canonicalWalletTransaction(tx: WalletTransaction) {
@@ -77,8 +92,18 @@ export async function verifyStepUpToken(
   const [body, sig, extra] = token.split(".");
   if (!body || !sig || extra) return {valid:false, reason:"MALFORMED_TOKEN"};
 
+  let actual: Uint8Array;
+
+  try {
+    // Reject alternate/non-canonical encodings before signature comparison.
+    // This prevents token-string malleability and keeps token hashes unique.
+    decodeCanonicalBase64Url(body);
+    actual = decodeCanonicalBase64Url(sig);
+  } catch {
+    return {valid:false, reason:"NON_CANONICAL_TOKEN"};
+  }
+
   const expected = await hmac(secret, body);
-  const actual = decodeBase64Url(sig);
 
   if (expected.length !== actual.length) return {valid:false, reason:"INVALID_SIGNATURE"};
 
@@ -87,7 +112,9 @@ export async function verifyStepUpToken(
   if (diff !== 0) return {valid:false, reason:"INVALID_SIGNATURE"};
 
   try {
-    const decoded = new TextDecoder().decode(decodeBase64Url(body));
+    const decoded = new TextDecoder().decode(
+      decodeCanonicalBase64Url(body)
+    );
     const payload = JSON.parse(decoded) as StepUpTokenPayload;
 
     if (payload.type !== "INTENTLOCK_STEP_UP_ONCE")

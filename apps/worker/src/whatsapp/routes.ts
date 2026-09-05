@@ -8,7 +8,8 @@ import {
   revokeWhatsappChat,
   extractPairingCode,
   pairingCodeMatches,
-  isWhatsappStopCommand
+  isWhatsappStopCommand,
+  isStaleWhatsappMessage
 } from "./access";
 
 const jsonHeaders={"content-type":"application/json; charset=utf-8"};
@@ -33,6 +34,10 @@ type Env={
   RAZORPAY_KEY_ID?:string;
   RAZORPAY_KEY_SECRET?:string;
   RAZORPAY_WEBHOOK_SECRET?:string;
+
+  PURCHASE_QUEUE?:{
+    send(job:unknown):Promise<unknown>;
+  };
 };
 
 export async function handleWhatsappRoutes(
@@ -51,7 +56,8 @@ export async function handleWhatsappRoutes(
       webhookPath:"/webhooks/waha",
       channel:"WHATSAPP",
       inboundAccess:"PAIRING_REQUIRED",
-      pairingConfigured:Boolean(env.WAHA_PAIRING_CODE)
+      pairingConfigured:Boolean(env.WAHA_PAIRING_CODE),
+      purchaseQueueConfigured:Boolean(env.PURCHASE_QUEUE)
     });
   }
 
@@ -99,28 +105,76 @@ export async function handleWhatsappRoutes(
   if(chatId.endsWith("@g.us") || chatId.endsWith("@newsletter"))
     return json({ok:true,ignored:"non_direct_chat"});
 
-  // V10.8: silent-by-default inbound access.
-  // Unauthorized chats are not persisted and receive no bot response.
+  // Ignore backlog replays after WAHA reconnect/restart.
+  // This prevents unread historical chats from suddenly invoking the bot.
+  if(
+    isStaleWhatsappMessage(
+      event.timestamp,
+      payload.timestamp
+    )
+  ){
+    return json({
+      ok:true,
+      ignored:"stale_message"
+    });
+  }
+
+  // V10.8.1: silent-by-default inbound access.
+  // Random/unpaired chats receive no reply and are not persisted.
   const authorized=await isWhatsappChatAuthorized(
     env.DATABASE_URL,
     chatId
   );
 
-  if(!authorized){
-    const supplied=extractPairingCode(body);
+  const suppliedPairingCode=extractPairingCode(body);
+  const validPairingAttempt=
+    !authorized &&
+    pairingCodeMatches(
+      suppliedPairingCode,
+      env.WAHA_PAIRING_CODE
+    );
 
-    if(
-      !pairingCodeMatches(
-        supplied,
-        env.WAHA_PAIRING_CODE
-      )
-    ){
-      return json({
-        ok:true,
-        ignored:"unauthorized_chat"
-      });
-    }
+  if(!authorized && !validPairingAttempt){
+    return json({
+      ok:true,
+      ignored:"unauthorized_chat"
+    });
+  }
 
+  // IMPORTANT:
+  // Deduplicate BEFORE pairing / STOP / HELP / BUY processing.
+  // The original V10.8 paired first and claimed later, so a duplicate
+  // delivery of the pairing message could become a normal BUY message.
+  const eventId=String(
+    event.id ??
+    messageId ??
+    `waha_${await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(raw)
+    ).then(
+      buf=>[...new Uint8Array(buf)]
+        .map(b=>b.toString(16).padStart(2,"0"))
+        .join("")
+    )}`
+  );
+
+  const claimed=await claimWebhookEvent(
+    env.DATABASE_URL,
+    eventId,
+    messageId,
+    chatId,
+    "message",
+    event
+  );
+
+  if(!claimed){
+    return json({
+      ok:true,
+      duplicate:true
+    });
+  }
+
+  if(validPairingAttempt){
     await authorizeWhatsappChat(
       env.DATABASE_URL,
       chatId,
@@ -149,6 +203,23 @@ To revoke access later, send:
     });
   }
 
+  // A paired user repeating the pairing command must NEVER fall through
+  // to the natural-language BUY parser.
+  if(suppliedPairingCode){
+    await sendWahaText({
+      baseUrl:env.WAHA_BASE_URL,
+      apiKey:env.WAHA_API_KEY,
+      session:String(event.session??"default"),
+      chatId,
+      text:"🔐 This chat is already paired with IntentLock. Reply *HELP* to continue."
+    });
+
+    return json({
+      ok:true,
+      alreadyPaired:true
+    });
+  }
+
   if(isWhatsappStopCommand(body)){
     await sendWahaText({
       baseUrl:env.WAHA_BASE_URL,
@@ -169,24 +240,6 @@ To revoke access later, send:
     });
   }
 
-  const eventId=String(
-    event.id ??
-    messageId ??
-    `waha_${await crypto.subtle.digest("SHA-256",new TextEncoder().encode(raw))
-      .then(buf=>[...new Uint8Array(buf)].map(b=>b.toString(16).padStart(2,"0")).join(""))}`
-  );
-
-  const claimed=await claimWebhookEvent(
-    env.DATABASE_URL,
-    eventId,
-    messageId,
-    chatId,
-    "message",
-    event
-  );
-
-  if(!claimed) return json({ok:true,duplicate:true});
-
   try{
     await handleWhatsappMessage(
       {
@@ -203,7 +256,8 @@ To revoke access later, send:
         UPSTASH_REDIS_REST_TOKEN:env.UPSTASH_REDIS_REST_TOKEN,
         RAZORPAY_KEY_ID:env.RAZORPAY_KEY_ID,
         RAZORPAY_KEY_SECRET:env.RAZORPAY_KEY_SECRET,
-        RAZORPAY_WEBHOOK_SECRET:env.RAZORPAY_WEBHOOK_SECRET
+        RAZORPAY_WEBHOOK_SECRET:env.RAZORPAY_WEBHOOK_SECRET,
+        PURCHASE_QUEUE:env.PURCHASE_QUEUE!
       },
       {
         chatId,

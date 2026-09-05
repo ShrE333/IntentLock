@@ -12,10 +12,23 @@ function b64url(bytes:Uint8Array){
 }
 
 function fromB64url(value:string){
+  if(!/^[A-Za-z0-9_-]+$/.test(value))
+    throw new Error("INVALID_BASE64URL");
+
   const padded=value.replace(/-/g,"+").replace(/_/g,"/")
     +"=".repeat((4-value.length%4)%4);
   const raw=atob(padded);
   return new Uint8Array([...raw].map(c=>c.charCodeAt(0)));
+}
+
+function fromCanonicalB64url(value:string){
+  const decoded=fromB64url(value);
+
+  // Enforce a unique Base64URL textual representation.
+  if(b64url(decoded)!==value)
+    throw new Error("NON_CANONICAL_BASE64URL");
+
+  return decoded;
 }
 
 export async function sha256(value:string){
@@ -61,8 +74,17 @@ export async function verifyAuthorizationToken(
   if(!body||!sig||extra)
     return {valid:false,reason:"MALFORMED_TOKEN"};
 
+  let actual:Uint8Array;
+
+  try{
+    // Reject alternate encodings before signature verification.
+    fromCanonicalB64url(body);
+    actual=fromCanonicalB64url(sig);
+  }catch{
+    return {valid:false,reason:"NON_CANONICAL_TOKEN"};
+  }
+
   const expected=await hmac(secret,`intentlock-auth-v1|${body}`);
-  const actual=fromB64url(sig);
 
   if(expected.length!==actual.length)
     return {valid:false,reason:"INVALID_SIGNATURE"};
@@ -75,7 +97,7 @@ export async function verifyAuthorizationToken(
 
   try{
     const payload=JSON.parse(
-      new TextDecoder().decode(fromB64url(body))
+      new TextDecoder().decode(fromCanonicalB64url(body))
     ) as AuthorizationTokenPayload;
 
     if(payload.type!=="INTENTLOCK_AUTH_V1")

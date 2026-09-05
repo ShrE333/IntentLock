@@ -63,3 +63,32 @@ export function isWhatsappStopCommand(text:string){
   const upper=text.trim().toUpperCase();
   return upper==="INTENTLOCK STOP" || upper==="STOP INTENTLOCK";
 }
+
+
+export function whatsappMessageTimestampMs(
+  eventTimestamp:unknown,
+  payloadTimestamp:unknown
+){
+  const raw=Number(payloadTimestamp ?? eventTimestamp ?? 0);
+  if(!Number.isFinite(raw) || raw<=0) return 0;
+  return raw>1_000_000_000_000 ? raw : raw*1000;
+}
+
+export function isStaleWhatsappMessage(
+  eventTimestamp:unknown,
+  payloadTimestamp:unknown,
+  nowMs=Date.now(),
+  maxAgeMs=5*60*1000
+){
+  const ts=whatsappMessageTimestampMs(
+    eventTimestamp,
+    payloadTimestamp
+  );
+
+  if(!ts) return false;
+
+  // Future timestamps caused by clock skew are not treated as stale.
+  if(ts>nowMs) return false;
+
+  return nowMs-ts>maxAgeMs;
+}

@@ -1,13 +1,13 @@
 import {listWallets,getWallet} from "../wallets/repository";
-import {createSession,addEvent,getSession,getEvents} from "../sessions/repository";
-import {runPurchaseSession,resolveSessionStepUp} from "../sessions/orchestrator";
+import {createSession,addEvents,getSession} from "../sessions/repository";
+import {resolveSessionStepUp} from "../sessions/orchestrator";
 import {connectorStatus} from "../commerce/registry";
 import {
   ensureChatState,getChatState,setActiveWallet,setActiveSession
 } from "./repository";
 import {parseWhatsappCommand} from "./commands";
 import {sendWahaText} from "./waha-client";
-import {createPaymentLinkForSession} from "../session-payments/service";
+import type {PurchaseQueueJob} from "../queue/purchase-jobs";
 
 type Env={
   DATABASE_URL:string;
@@ -24,6 +24,10 @@ type Env={
   RAZORPAY_KEY_ID?:string;
   RAZORPAY_KEY_SECRET?:string;
   RAZORPAY_WEBHOOK_SECRET?:string;
+
+  PURCHASE_QUEUE:{
+    send(job:PurchaseQueueJob):Promise<unknown>;
+  };
 };
 
 async function reply(
@@ -43,17 +47,6 @@ async function reply(
 
 function walletLine(w:any,index:number){
   return `${index+1}. ${w.name}\n   Auto ≤ ₹${Number(w.autoBuyLimit).toLocaleString("en-IN")} · Hard ≤ ₹${Number(w.maxSingleTransaction).toLocaleString("en-IN")}`;
-}
-
-function candidateLine(c:any){
-  const p=c.product;
-  const icon=c.decision==="ALLOW"?"✅":c.decision==="STEP_UP"?"⚠️":"❌";
-  const detail=c.decision==="BLOCK"
-    ? c.violations.join(", ")
-    : c.decision==="STEP_UP"
-      ? `+₹${Number(c.additionalAuthorityRequired).toLocaleString("en-IN")} approval`
-      : "autonomous";
-  return `${icon} ${p.brand} · ₹${Number(p.price).toLocaleString("en-IN")} · ${detail}`;
 }
 
 export async function handleWhatsappMessage(
@@ -244,24 +237,15 @@ Money movement remains disabled.`);
       return;
     }
 
-    const payment=await createPaymentLinkForSession(
-      {
-        DATABASE_URL:env.DATABASE_URL,
-        APPROVAL_SIGNING_SECRET:env.APPROVAL_SIGNING_SECRET,
-        UPSTASH_REDIS_REST_URL:env.UPSTASH_REDIS_REST_URL,
-        UPSTASH_REDIS_REST_TOKEN:env.UPSTASH_REDIS_REST_TOKEN,
-        RAZORPAY_KEY_ID:env.RAZORPAY_KEY_ID,
-        RAZORPAY_KEY_SECRET:env.RAZORPAY_KEY_SECRET,
-        RAZORPAY_WEBHOOK_SECRET:env.RAZORPAY_WEBHOOK_SECRET,
-        SHOPIFY_STORE_DOMAIN:env.SHOPIFY_STORE_DOMAIN,
-        SHOPIFY_STOREFRONT_PUBLIC_TOKEN:env.SHOPIFY_STOREFRONT_PUBLIC_TOKEN,
-        SHOPIFY_STOREFRONT_PRIVATE_TOKEN:env.SHOPIFY_STOREFRONT_PRIVATE_TOKEN,
-        SHOPIFY_STOREFRONT_API_VERSION:env.SHOPIFY_STOREFRONT_API_VERSION,
-        WAHA_BASE_URL:env.WAHA_BASE_URL,
-        WAHA_API_KEY:env.WAHA_API_KEY
-      },
-      result.session!.sessionId
-    );
+    if(!env.PURCHASE_QUEUE)
+      throw new Error("PURCHASE_QUEUE_NOT_CONFIGURED");
+
+    await env.PURCHASE_QUEUE.send({
+      kind:"CREATE_PAYMENT",
+      sessionId:result.session!.sessionId,
+      chatId:input.chatId,
+      wahaSession:input.wahaSession
+    });
 
     await reply(env,input.chatId,input.wahaSession,
 `✅ *Authority granted*
@@ -269,14 +253,11 @@ Money movement remains disabled.`);
 Session: ${result.session?.sessionId}
 Resolution: ${String(result.result.decision).replaceAll("_"," ")}
 
-💳 *Razorpay checkout ready*
-${payment.paymentLink?.shortUrl}
-
 ${action==="ALLOW_ONCE"
-  ? "The exact one-time authorization will be consumed by this checkout."
+  ? "The exact one-time authorization is attached to this PurchaseSession."
   : `The autonomous limit is now ₹${Number(result.result.newAutoBuyLimit).toLocaleString("en-IN")}.`}
 
-IntentLock will mark the session CAPTURED only after Razorpay's verified webhook.`);
+Preparing the Razorpay checkout now…`);
     return;
   }
 
@@ -307,23 +288,49 @@ Reply *WALLETS*, then *USE 1* to choose an Intent Wallet.`);
 
     const wallet=await getWallet(env.DATABASE_URL,state.activeWalletId);
 
-    await addEvent(env.DATABASE_URL,purchase.sessionId,"SESSION_CREATED",{
-      channel:"WHATSAPP",
-      connectorId:activeConnector.id,
-      chatId:input.chatId
-    });
+    await addEvents(
+      env.DATABASE_URL,
+      purchase.sessionId,
+      [
+        {
+          type:"SESSION_CREATED",
+          payload:{
+            channel:"WHATSAPP",
+            connectorId:activeConnector.id,
+            chatId:input.chatId
+          }
+        },
+        {
+          type:"WALLET_ATTACHED",
+          payload:{
+            walletId:wallet?.walletId,
+            walletName:wallet?.name,
+            totalAuthority:wallet?.totalAuthority,
+            autoBuyLimit:wallet?.autoBuyLimit,
+            maxSingleTransaction:wallet?.maxSingleTransaction
+          }
+        },
+        {
+          type:"USER_INTENT_RECEIVED",
+          payload:{
+            prompt:cmd.prompt,
+            channel:"WHATSAPP"
+          }
+        }
+      ]
+    );
 
-    await addEvent(env.DATABASE_URL,purchase.sessionId,"WALLET_ATTACHED",{
-      walletId:wallet?.walletId,
-      walletName:wallet?.name,
-      totalAuthority:wallet?.totalAuthority,
-      autoBuyLimit:wallet?.autoBuyLimit,
-      maxSingleTransaction:wallet?.maxSingleTransaction
-    });
+    if(!env.PURCHASE_QUEUE)
+      throw new Error("PURCHASE_QUEUE_NOT_CONFIGURED");
 
-    await addEvent(env.DATABASE_URL,purchase.sessionId,"USER_INTENT_RECEIVED",{
-      prompt:cmd.prompt,
-      channel:"WHATSAPP"
+    // The webhook invocation ends after this enqueue + acknowledgement.
+    // Shopify search, policy evaluation, audit and Razorpay run in a fresh
+    // Queue consumer invocation with its own Cloudflare subrequest budget.
+    await env.PURCHASE_QUEUE.send({
+      kind:"RUN_PURCHASE",
+      sessionId:purchase.sessionId,
+      chatId:input.chatId,
+      wahaSession:input.wahaSession
     });
 
     await reply(env,input.chatId,input.wahaSession,
@@ -333,96 +340,8 @@ Session: ${purchase.sessionId}
 Wallet: ${wallet?.name}
 Goal: ${cmd.prompt}
 
-Searching marketplace and evaluating every candidate against your authority…`);
+Searching live Shopify and evaluating every candidate against your authority…`);
 
-    const run=await runPurchaseSession(
-      {
-        DATABASE_URL:env.DATABASE_URL,
-        APPROVAL_SIGNING_SECRET:env.APPROVAL_SIGNING_SECRET,
-        COMMERCE_CATALOG_URL:env.COMMERCE_CATALOG_URL,
-        SHOPIFY_STORE_DOMAIN:env.SHOPIFY_STORE_DOMAIN,
-        SHOPIFY_STOREFRONT_PUBLIC_TOKEN:env.SHOPIFY_STOREFRONT_PUBLIC_TOKEN,
-        SHOPIFY_STOREFRONT_PRIVATE_TOKEN:env.SHOPIFY_STOREFRONT_PRIVATE_TOKEN,
-        SHOPIFY_STOREFRONT_API_VERSION:env.SHOPIFY_STOREFRONT_API_VERSION
-      },
-      purchase.sessionId
-    );
-
-    const lines=run.candidates.slice(0,6).map(candidateLine);
-
-    if(run.session?.status==="READY_TO_PAY"){
-      const payment=await createPaymentLinkForSession(
-        {
-          DATABASE_URL:env.DATABASE_URL,
-          APPROVAL_SIGNING_SECRET:env.APPROVAL_SIGNING_SECRET,
-          UPSTASH_REDIS_REST_URL:env.UPSTASH_REDIS_REST_URL,
-          UPSTASH_REDIS_REST_TOKEN:env.UPSTASH_REDIS_REST_TOKEN,
-          RAZORPAY_KEY_ID:env.RAZORPAY_KEY_ID,
-          RAZORPAY_KEY_SECRET:env.RAZORPAY_KEY_SECRET,
-          RAZORPAY_WEBHOOK_SECRET:env.RAZORPAY_WEBHOOK_SECRET,
-          SHOPIFY_STORE_DOMAIN:env.SHOPIFY_STORE_DOMAIN,
-          SHOPIFY_STOREFRONT_PUBLIC_TOKEN:env.SHOPIFY_STOREFRONT_PUBLIC_TOKEN,
-          SHOPIFY_STOREFRONT_PRIVATE_TOKEN:env.SHOPIFY_STOREFRONT_PRIVATE_TOKEN,
-          SHOPIFY_STOREFRONT_API_VERSION:env.SHOPIFY_STOREFRONT_API_VERSION,
-          WAHA_BASE_URL:env.WAHA_BASE_URL,
-          WAHA_API_KEY:env.WAHA_API_KEY
-        },
-        run.session.sessionId
-      );
-
-      await reply(env,input.chatId,input.wahaSession,
-`🧠 *Agent evaluation*
-
-${lines.join("\n")}
-
-🎯 *Selected*
-${run.session.selectedProduct?.title}
-₹${run.session.selectedProduct?.price.toLocaleString("en-IN")}
-
-💳 *Razorpay checkout ready*
-${payment.paymentLink?.shortUrl}
-
-IntentLock has not marked the purchase complete yet.
-Completion happens only after the verified Razorpay webhook.
-
-Session: ${run.session.sessionId}`);
-      return;
-    }
-
-    if(run.session?.status==="AWAITING_STEP_UP"){
-      const selected=run.session.selectedProduct;
-      const selectedEval=run.candidates.find(c=>c.product.id===selected?.id);
-
-      await reply(env,input.chatId,input.wahaSession,
-`🧠 *Agent evaluation*
-
-${lines.join("\n")}
-
-⚠️ *STEP-UP REQUIRED*
-
-${selected?.title}
-₹${selected?.price.toLocaleString("en-IN")}
-
-Additional authority required:
-+₹${Number(selectedEval?.additionalAuthorityRequired??0).toLocaleString("en-IN")}
-
-Reply:
-*ALLOW ONCE*
-*RAISE LIMIT*
-or *REJECT*
-
-Session: ${run.session.sessionId}`);
-      return;
-    }
-
-    await reply(env,input.chatId,input.wahaSession,
-`🚫 *No authorized candidate*
-
-${lines.join("\n")}
-
-IntentLock blocked autonomous purchase.
-Money movement: ₹0
-
-Session: ${run.session?.sessionId}`);
+    return;
   }
 }

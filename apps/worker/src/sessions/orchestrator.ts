@@ -1,10 +1,17 @@
 import {getWallet} from "../wallets/repository";
 import {evaluateWalletTransaction} from "../wallets/policy";
-import {issueStepUpRequest,resolveStepUpRequest} from "../wallets/stepup";
+import {
+  issueStepUpRequest,
+  resolveStepUpRequest
+} from "../wallets/stepup";
 import {getCommerceConnectors} from "../commerce/registry";
 import type {CommerceProduct} from "../commerce/types";
 import {
-  addEvent,getEvents,getSession,updateSession
+  addEvent,
+  addEvents,
+  getEvents,
+  getSession,
+  updateSession
 } from "./repository";
 
 type Env={
@@ -17,23 +24,56 @@ type Env={
   SHOPIFY_STOREFRONT_API_VERSION?:string;
 };
 
-export async function runPurchaseSession(env:Env,sessionId:string){
-  const session=await getSession(env.DATABASE_URL,sessionId);
-  if(!session) throw new Error("SESSION_NOT_FOUND");
+type EvaluatedCandidate={
+  product:CommerceProduct;
+  decision:"ALLOW"|"STEP_UP"|"BLOCK";
+  violations:string[];
+  reasons:string[];
+  additionalAuthorityRequired:number;
+};
 
-  const wallet=await getWallet(env.DATABASE_URL,session.walletId);
-  if(!wallet) throw new Error("WALLET_NOT_FOUND");
+export async function runPurchaseSession(
+  env:Env,
+  sessionId:string
+){
+  const session=await getSession(
+    env.DATABASE_URL,
+    sessionId
+  );
+
+  if(!session)
+    throw new Error("SESSION_NOT_FOUND");
+
+  const wallet=await getWallet(
+    env.DATABASE_URL,
+    session.walletId
+  );
+
+  if(!wallet)
+    throw new Error("WALLET_NOT_FOUND");
 
   const connector=getCommerceConnectors(env)
     .find(c=>c.info().id===session.connectorId);
 
-  if(!connector) throw new Error("CONNECTOR_NOT_AVAILABLE");
+  if(!connector)
+    throw new Error("CONNECTOR_NOT_AVAILABLE");
 
-  await updateSession(env.DATABASE_URL,sessionId,{status:"SEARCHING"});
-  await addEvent(env.DATABASE_URL,sessionId,"SEARCH_STARTED",{
-    connector:connector.info().name,
-    query:session.userPrompt
-  });
+  await updateSession(
+    env.DATABASE_URL,
+    sessionId,
+    {status:"SEARCHING"}
+  );
+
+  // Keep SEARCH_STARTED durable before the external commerce request.
+  await addEvent(
+    env.DATABASE_URL,
+    sessionId,
+    "SEARCH_STARTED",
+    {
+      connector:connector.info().name,
+      query:session.userPrompt
+    }
+  );
 
   const products=await connector.search({
     query:session.userPrompt,
@@ -44,101 +84,117 @@ export async function runPurchaseSession(env:Env,sessionId:string){
     limit:12
   });
 
-  const evaluated:{
-    product:CommerceProduct;
-    decision:"ALLOW"|"STEP_UP"|"BLOCK";
-    violations:string[];
-    reasons:string[];
-    additionalAuthorityRequired:number;
+  const evaluated:EvaluatedCandidate[]=[];
+  const trace:{
+    type:string;
+    payload:Record<string,unknown>;
   }[]=[];
 
   for(const product of products){
-    await addEvent(env.DATABASE_URL,sessionId,"PRODUCT_FOUND",{
-      productId:product.id,
-      title:product.title,
-      merchant:product.merchant,
-      price:product.price,
-      brand:product.brand
+    trace.push({
+      type:"PRODUCT_FOUND",
+      payload:{
+        productId:product.id,
+        title:product.title,
+        merchant:product.merchant,
+        price:product.price,
+        brand:product.brand
+      }
     });
 
     if(product.merchantMessage){
-      await addEvent(env.DATABASE_URL,sessionId,"MERCHANT_TEXT_OBSERVED",{
-        productId:product.id,
-        merchant:product.merchant,
-        trust:"UNTRUSTED",
-        message:product.merchantMessage
+      trace.push({
+        type:"MERCHANT_TEXT_OBSERVED",
+        payload:{
+          productId:product.id,
+          merchant:product.merchant,
+          trust:"UNTRUSTED",
+          message:product.merchantMessage
+        }
       });
     }
 
-    const evaluation=evaluateWalletTransaction(wallet,{
-      productName:product.title,
-      category:product.category,
-      brand:product.brand,
-      amount:product.price,
-      currency:product.currency,
-      quantity:1,
-      features:product.features
-    });
+    const evaluation=evaluateWalletTransaction(
+      wallet,
+      {
+        productName:product.title,
+        category:product.category,
+        brand:product.brand,
+        amount:product.price,
+        currency:product.currency,
+        quantity:1,
+        features:product.features
+      }
+    );
 
     evaluated.push({
       product,
       decision:evaluation.decision,
       violations:evaluation.violations,
       reasons:evaluation.reasons,
-      additionalAuthorityRequired:evaluation.additionalAuthorityRequired
+      additionalAuthorityRequired:
+        evaluation.additionalAuthorityRequired
     });
 
-    await addEvent(env.DATABASE_URL,sessionId,"POLICY_DECISION",{
-      productId:product.id,
-      title:product.title,
-      decision:evaluation.decision,
-      violations:evaluation.violations,
-      additionalAuthorityRequired:evaluation.additionalAuthorityRequired
+    trace.push({
+      type:"POLICY_DECISION",
+      payload:{
+        productId:product.id,
+        title:product.title,
+        decision:evaluation.decision,
+        violations:evaluation.violations,
+        additionalAuthorityRequired:
+          evaluation.additionalAuthorityRequired
+      }
     });
   }
 
-  const allowed=evaluated.filter(x=>x.decision==="ALLOW");
-  const stepUps=evaluated.filter(x=>x.decision==="STEP_UP");
+  const allowed=evaluated
+    .filter(x=>x.decision==="ALLOW")
+    .sort((a,b)=>a.product.price-b.product.price);
 
-  // Selection is deterministic: lowest-priced valid autonomous candidate first.
+  const stepUps=evaluated
+    .filter(x=>x.decision==="STEP_UP")
+    .sort((a,b)=>a.product.price-b.product.price);
+
   if(allowed.length){
-    allowed.sort((a,b)=>a.product.price-b.product.price);
     const selected=allowed[0];
 
-    await updateSession(env.DATABASE_URL,sessionId,{
-      status:"READY_TO_PAY",
-      selectedProduct:selected.product,
-      selectedDecision:"ALLOW"
+    await updateSession(
+      env.DATABASE_URL,
+      sessionId,
+      {
+        status:"READY_TO_PAY",
+        selectedProduct:selected.product,
+        selectedDecision:"ALLOW"
+      }
+    );
+
+    trace.push({
+      type:"CANDIDATE_SELECTED",
+      payload:{
+        productId:selected.product.id,
+        title:selected.product.title,
+        price:selected.product.price,
+        reason:"LOWEST_PRICE_AUTONOMOUSLY_ALLOWED"
+      }
     });
 
-    await addEvent(env.DATABASE_URL,sessionId,"CANDIDATE_SELECTED",{
-      productId:selected.product.id,
-      title:selected.product.title,
-      price:selected.product.price,
-      reason:"LOWEST_PRICE_AUTONOMOUSLY_ALLOWED"
+    trace.push({
+      type:"AUTO_AUTHORIZED",
+      payload:{
+        productId:selected.product.id,
+        amount:selected.product.price,
+        note:
+          "Candidate is inside delegated autonomous authority and may proceed to payment execution."
+      }
     });
-
-    await addEvent(env.DATABASE_URL,sessionId,"AUTO_AUTHORIZED",{
-      productId:selected.product.id,
-      amount:selected.product.price,
-      note:"Eligible for payment execution; Razorpay session wiring is completed in the payment/receipt milestone."
-    });
-  } else if(stepUps.length){
-    stepUps.sort((a,b)=>a.product.price-b.product.price);
+  }else if(stepUps.length){
     const selected=stepUps[0];
 
-    const evaluation=evaluateWalletTransaction(wallet,{
-      productName:selected.product.title,
-      category:selected.product.category,
-      brand:selected.product.brand,
-      amount:selected.product.price,
-      currency:selected.product.currency,
-      quantity:1,
-      features:selected.product.features
-    });
-
-    const stepUp=await issueStepUpRequest(
-      env.DATABASE_URL,wallet,{
+    const evaluation=evaluateWalletTransaction(
+      wallet,
+      {
         productName:selected.product.title,
         category:selected.product.category,
         brand:selected.product.brand,
@@ -146,43 +202,89 @@ export async function runPurchaseSession(env:Env,sessionId:string){
         currency:selected.product.currency,
         quantity:1,
         features:selected.product.features
-      },evaluation
+      }
     );
 
-    await updateSession(env.DATABASE_URL,sessionId,{
-      status:"AWAITING_STEP_UP",
-      selectedProduct:selected.product,
-      selectedDecision:"STEP_UP",
-      stepUpRequestId:stepUp?.requestId??null
+    const stepUp=await issueStepUpRequest(
+      env.DATABASE_URL,
+      wallet,
+      {
+        productName:selected.product.title,
+        category:selected.product.category,
+        brand:selected.product.brand,
+        amount:selected.product.price,
+        currency:selected.product.currency,
+        quantity:1,
+        features:selected.product.features
+      },
+      evaluation
+    );
+
+    await updateSession(
+      env.DATABASE_URL,
+      sessionId,
+      {
+        status:"AWAITING_STEP_UP",
+        selectedProduct:selected.product,
+        selectedDecision:"STEP_UP",
+        stepUpRequestId:stepUp?.requestId??null
+      }
+    );
+
+    trace.push({
+      type:"CANDIDATE_SELECTED",
+      payload:{
+        productId:selected.product.id,
+        title:selected.product.title,
+        price:selected.product.price,
+        reason:"BEST_VALID_CANDIDATE_REQUIRES_STEP_UP"
+      }
     });
 
-    await addEvent(env.DATABASE_URL,sessionId,"CANDIDATE_SELECTED",{
-      productId:selected.product.id,
-      title:selected.product.title,
-      price:selected.product.price,
-      reason:"BEST_VALID_CANDIDATE_REQUIRES_STEP_UP"
+    trace.push({
+      type:"STEP_UP_REQUIRED",
+      payload:{
+        requestId:stepUp?.requestId??null,
+        requestedAmount:selected.product.price,
+        additionalAuthorityRequired:
+          selected.additionalAuthorityRequired
+      }
     });
+  }else{
+    await updateSession(
+      env.DATABASE_URL,
+      sessionId,
+      {
+        status:"BLOCKED",
+        selectedDecision:"BLOCK"
+      }
+    );
 
-    await addEvent(env.DATABASE_URL,sessionId,"STEP_UP_REQUIRED",{
-      requestId:stepUp?.requestId??null,
-      requestedAmount:selected.product.price,
-      additionalAuthorityRequired:selected.additionalAuthorityRequired
-    });
-  } else {
-    await updateSession(env.DATABASE_URL,sessionId,{
-      status:"BLOCKED",
-      selectedDecision:"BLOCK"
-    });
-
-    await addEvent(env.DATABASE_URL,sessionId,"SESSION_BLOCKED",{
-      reason:"NO_AUTHORIZED_CANDIDATE",
-      evaluatedCandidates:evaluated.length
+    trace.push({
+      type:"SESSION_BLOCKED",
+      payload:{
+        reason:"NO_AUTHORIZED_CANDIDATE",
+        evaluatedCandidates:evaluated.length
+      }
     });
   }
 
+  // V10.8.5: all candidate activity is persisted in one DB subrequest.
+  await addEvents(
+    env.DATABASE_URL,
+    sessionId,
+    trace
+  );
+
   return {
-    session:await getSession(env.DATABASE_URL,sessionId),
-    events:await getEvents(env.DATABASE_URL,sessionId),
+    session:await getSession(
+      env.DATABASE_URL,
+      sessionId
+    ),
+    events:await getEvents(
+      env.DATABASE_URL,
+      sessionId
+    ),
     candidates:evaluated
   };
 }
@@ -192,13 +294,29 @@ export async function resolveSessionStepUp(
   sessionId:string,
   action:"ALLOW_ONCE"|"RAISE_LIMIT"|"REJECT"
 ){
-  const session=await getSession(env.DATABASE_URL,sessionId);
-  if(!session) throw new Error("SESSION_NOT_FOUND");
-  if(!session.stepUpRequestId) throw new Error("SESSION_HAS_NO_STEP_UP_REQUEST");
-  if(!env.APPROVAL_SIGNING_SECRET) throw new Error("APPROVAL_SIGNING_SECRET_NOT_CONFIGURED");
+  const session=await getSession(
+    env.DATABASE_URL,
+    sessionId
+  );
 
-  const wallet=await getWallet(env.DATABASE_URL,session.walletId);
-  if(!wallet) throw new Error("WALLET_NOT_FOUND");
+  if(!session)
+    throw new Error("SESSION_NOT_FOUND");
+
+  if(!session.stepUpRequestId)
+    throw new Error("SESSION_HAS_NO_STEP_UP_REQUEST");
+
+  if(!env.APPROVAL_SIGNING_SECRET)
+    throw new Error(
+      "APPROVAL_SIGNING_SECRET_NOT_CONFIGURED"
+    );
+
+  const wallet=await getWallet(
+    env.DATABASE_URL,
+    session.walletId
+  );
+
+  if(!wallet)
+    throw new Error("WALLET_NOT_FOUND");
 
   const result=await resolveStepUpRequest(
     env.DATABASE_URL,
@@ -209,22 +327,41 @@ export async function resolveSessionStepUp(
   );
 
   if(action==="REJECT"){
-    await updateSession(env.DATABASE_URL,sessionId,{status:"REJECTED"});
-    await addEvent(env.DATABASE_URL,sessionId,"STEP_UP_REJECTED",{
-      requestId:session.stepUpRequestId
-    });
-  } else {
-    await updateSession(env.DATABASE_URL,sessionId,{
-      status:"READY_TO_PAY",
-      authorizationId:result.authorizationId??null
-    });
+    await updateSession(
+      env.DATABASE_URL,
+      sessionId,
+      {status:"REJECTED"}
+    );
 
-    await addEvent(env.DATABASE_URL,sessionId,
-      action==="ALLOW_ONCE"?"STEP_UP_APPROVED_ONCE":"AUTO_LIMIT_RAISED",
+    await addEvent(
+      env.DATABASE_URL,
+      sessionId,
+      "STEP_UP_REJECTED",
+      {requestId:session.stepUpRequestId}
+    );
+  }else{
+    await updateSession(
+      env.DATABASE_URL,
+      sessionId,
+      {
+        status:"READY_TO_PAY",
+        authorizationId:
+          result.authorizationId??null
+      }
+    );
+
+    await addEvent(
+      env.DATABASE_URL,
+      sessionId,
+      action==="ALLOW_ONCE"
+        ?"STEP_UP_APPROVED_ONCE"
+        :"AUTO_LIMIT_RAISED",
       {
         requestId:session.stepUpRequestId,
-        authorizationId:result.authorizationId??null,
-        newAutoBuyLimit:result.newAutoBuyLimit??null,
+        authorizationId:
+          result.authorizationId??null,
+        newAutoBuyLimit:
+          result.newAutoBuyLimit??null,
         paymentAllowed:result.paymentAllowed
       }
     );
@@ -232,7 +369,13 @@ export async function resolveSessionStepUp(
 
   return {
     result,
-    session:await getSession(env.DATABASE_URL,sessionId),
-    events:await getEvents(env.DATABASE_URL,sessionId)
+    session:await getSession(
+      env.DATABASE_URL,
+      sessionId
+    ),
+    events:await getEvents(
+      env.DATABASE_URL,
+      sessionId
+    )
   };
 }

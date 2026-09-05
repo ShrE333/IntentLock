@@ -21,4 +21,22 @@
       "new_sqlite_classes": ["PurchaseAgent"]
     }
   ]
+,
+  "queues": {
+    "producers": [
+      {
+        "binding": "PURCHASE_QUEUE",
+        "queue": "intentlock-purchase-jobs"
+      }
+    ],
+    "consumers": [
+      {
+        "queue": "intentlock-purchase-jobs",
+        "max_batch_size": 1,
+        "max_batch_timeout": 1,
+        "max_retries": 5,
+        "retry_delay": 3
+      }
+    ]
+  }
 }

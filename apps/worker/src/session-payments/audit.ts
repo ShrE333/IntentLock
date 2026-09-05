@@ -1,5 +1,5 @@
 import {neon} from "@neondatabase/serverless";
-import {canonicalJson,sha256Hex} from "../db/audit";
+import {canonicalJson} from "../db/audit";
 
 export async function appendSessionAuditEvent(
   db:string,
@@ -23,25 +23,66 @@ export async function appendSessionAuditEvent(
     )
   `;
 
-  return rows[0];
+  return {
+    eventId,
+    ...(rows[0]??{})
+  };
 }
 
+export type SessionTraceRow={
+  event_id:string;
+  event_type:string;
+  payload:unknown;
+  occurred_at:string|Date;
+};
 
-function uuidFromHex(hex:string){
-  const h=hex.slice(0,32).split("");
-  h[12]="4";
-  h[16]=(["8","9","a","b"])[parseInt(h[16],16)%4];
-  const v=h.join("");
-  return `${v.slice(0,8)}-${v.slice(8,12)}-${v.slice(12,16)}-${v.slice(16,20)}-${v.slice(20,32)}`;
+export function buildSessionTraceSnapshot(rows:SessionTraceRow[]){
+  return {
+    version:"intentlock-session-trace-v1",
+    source:"purchase_session_events",
+    eventCount:rows.length,
+    events:rows.map(row=>({
+      sessionEventId:String(row.event_id),
+      eventType:String(row.event_type),
+      occurredAt:new Date(row.occurred_at).toISOString(),
+      data:row.payload??{}
+    }))
+  };
 }
 
+/**
+ * V10.8.2
+ *
+ * Previous implementation made up to THREE Neon HTTP requests per
+ * PurchaseSession event:
+ *   SELECT existing audit row
+ *   append_audit_event(...)
+ *   INSERT mirror row
+ *
+ * A normal Shopify purchase can already contain ~18 session events,
+ * which is enough to exceed Cloudflare Free's per-invocation
+ * subrequest ceiling once the rest of the WhatsApp/payment pipeline
+ * is included.
+ *
+ * This implementation performs the same evidence preservation with
+ * three database subrequests TOTAL:
+ *
+ *   1. Fetch all currently-unmirrored session events.
+ *   2. Append ONE tamper-evident audit event containing the complete
+ *      ordered session trace snapshot.
+ *   3. Mark all exact included event IDs as mirrored in one INSERT...
+ *      SELECT statement.
+ *
+ * New events created after this call remain unmapped and can be
+ * snapshotted by a later call, so the operation is incremental.
+ */
 export async function mirrorSessionTraceToAudit(
   db:string,
   sessionId:string
 ){
   const sql=neon(db);
 
-  const rows:any[]=await sql`
+  const rows=await sql`
     SELECT
       pse.event_id,
       pse.event_type,
@@ -53,57 +94,50 @@ export async function mirrorSessionTraceToAudit(
     WHERE pse.session_id=${sessionId}
       AND sam.session_event_id IS NULL
     ORDER BY pse.event_seq ASC
-  `;
+  ` as unknown as SessionTraceRow[];
 
-  let mirrored=0;
-
-  for(const row of rows){
-    const digest=await sha256Hex(`session-trace|${String(row.event_id)}`);
-    const auditEventId=uuidFromHex(digest);
-
-    const existing:any[]=await sql`
-      SELECT event_id::text
-      FROM audit_events
-      WHERE event_id=${auditEventId}::uuid
-      LIMIT 1
-    `;
-
-    if(!existing.length){
-      const occurredAt=new Date(String(row.occurred_at)).toISOString();
-      const payload={
-        source:"purchase_session_events",
-        sessionEventId:String(row.event_id),
-        eventType:String(row.event_type),
-        occurredAt,
-        data:row.payload??{}
-      };
-      const canonical=canonicalJson(payload);
-
-      await sql`
-        SELECT *
-        FROM append_audit_event(
-          ${auditEventId}::uuid,
-          ${sessionId},
-          ${String(row.event_type)},
-          ${canonical}::jsonb,
-          ${canonical},
-          ${occurredAt}
-        )
-      `;
-    }
-
-    await sql`
-      INSERT INTO session_audit_mirrors(
-        session_event_id,session_id,audit_event_id
-      )
-      VALUES(
-        ${String(row.event_id)},${sessionId},${auditEventId}::uuid
-      )
-      ON CONFLICT(session_event_id) DO NOTHING
-    `;
-
-    mirrored++;
+  if(!rows.length){
+    return {
+      mirrored:0,
+      auditEventId:null
+    };
   }
 
-  return mirrored;
+  const snapshot=buildSessionTraceSnapshot(rows);
+
+  const audit=await appendSessionAuditEvent(
+    db,
+    sessionId,
+    "PURCHASE_SESSION_TRACE_SNAPSHOT",
+    snapshot
+  );
+
+  const eventIds=JSON.stringify(
+    rows.map(row=>String(row.event_id))
+  );
+
+  await sql`
+    INSERT INTO session_audit_mirrors(
+      session_event_id,
+      session_id,
+      audit_event_id
+    )
+    SELECT
+      pse.event_id,
+      pse.session_id,
+      ${audit.eventId}::uuid
+    FROM purchase_session_events pse
+    WHERE pse.session_id=${sessionId}
+      AND pse.event_id IN (
+        SELECT jsonb_array_elements_text(
+          ${eventIds}::jsonb
+        )
+      )
+    ON CONFLICT(session_event_id) DO NOTHING
+  `;
+
+  return {
+    mirrored:rows.length,
+    auditEventId:audit.eventId
+  };
 }
