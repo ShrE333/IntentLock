@@ -62,6 +62,14 @@ export async function resolveStepUpRequest(
   }
 
   if(action==="RAISE_LIMIT"){
+    // V10.9: a risk-driven STEP_UP asks for human consent,
+    // not more spending authority. It is represented by
+    // additional_authority_required = 0.
+    if(Number(row.additional_authority_required)===0){
+      throw new Error(
+        "RISK_STEP_UP_REQUIRES_ALLOW_ONCE_OR_REJECT"
+      );
+    }
     if(requestedAmount>wallet.maxSingleTransaction)
       throw new Error("REQUEST_EXCEEDS_HARD_CEILING");
 

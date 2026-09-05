@@ -2,11 +2,22 @@ import {
   runPurchaseSession
 } from "../sessions/orchestrator";
 import {
-  getSession
+  addEvent,
+  getSession,
+  updateSession
 } from "../sessions/repository";
 import {
   createPaymentLinkForSession
 } from "../session-payments/service";
+import {
+  assessSessionRisk
+} from "../risk/service";
+import {
+  getWallet
+} from "../wallets/repository";
+import {
+  issueStepUpRequest
+} from "../wallets/stepup";
 import {
   sendWahaText
 } from "../whatsapp/waha-client";
@@ -147,6 +158,162 @@ function orchestrationEnv(env:Env){
   };
 }
 
+
+async function assessCurrentRisk(
+  env:Env,
+  session:any,
+  candidates:any[]
+){
+  const selected=session.selectedProduct;
+  if(!selected) return null;
+
+  const searchMerchantMessages=candidates
+    .map(candidate=>candidate?.product?.merchantMessage)
+    .filter(
+      (value):value is string=>
+        typeof value==="string" &&
+        value.trim().length>0
+    );
+
+  const assessment=await assessSessionRisk(
+    env.DATABASE_URL,
+    {
+      sessionId:session.sessionId,
+      walletId:session.walletId,
+      agentId:"intentlock-purchase-agent",
+      merchant:selected.merchant??null,
+      amount:Number(selected.price),
+      currency:String(selected.currency??"INR"),
+      policyDecision:
+        session.selectedDecision??"ALLOW",
+      selectedMerchantMessage:
+        selected.merchantMessage??null,
+      searchMerchantMessages
+    },
+    {
+      reuseExisting:true
+    }
+  );
+
+  await addEvent(
+    env.DATABASE_URL,
+    session.sessionId,
+    "AGENT_RISK_ASSESSED",
+    {
+      assessmentId:assessment.assessmentId,
+      trustScore:assessment.trustScore,
+      riskLevel:assessment.riskLevel,
+      riskAction:assessment.riskAction,
+      policyDecision:
+        assessment.policyDecision,
+      signals:assessment.signals.map(
+        signal=>({
+          code:signal.code,
+          severity:signal.severity,
+          delta:signal.delta
+        })
+      ),
+      invariant:
+        "RISK_CANNOT_EXPAND_WALLET_AUTHORITY"
+    }
+  );
+
+  return assessment;
+}
+
+async function applyHighRiskStepUp(
+  env:Env,
+  session:any,
+  assessment:any
+){
+  if(
+    assessment.riskAction!=="STEP_UP" ||
+    session.selectedDecision!=="ALLOW" ||
+    !session.selectedProduct
+  ){
+    return null;
+  }
+
+  const wallet=await getWallet(
+    env.DATABASE_URL,
+    session.walletId
+  );
+
+  if(!wallet)
+    throw new Error("WALLET_NOT_FOUND");
+
+  const product=session.selectedProduct;
+
+  const transaction={
+    productName:product.title,
+    category:product.category,
+    brand:product.brand,
+    amount:Number(product.price),
+    currency:String(product.currency??"INR"),
+    quantity:1,
+    features:Array.isArray(product.features)
+      ?product.features.map(String)
+      :[]
+  };
+
+  const stepUp=await issueStepUpRequest(
+    env.DATABASE_URL,
+    wallet,
+    transaction,
+    {
+      decision:"STEP_UP",
+      violations:[],
+      reasons:[
+        "Adaptive Agent Trust & Risk Engine requires explicit approval."
+      ],
+      remainingAuthority:Math.max(
+        0,
+        Number(wallet.totalAuthority)-
+        Number(wallet.spentAmount)
+      ),
+      requestedAmount:Number(product.price),
+      additionalAuthorityRequired:0,
+      canAutoExecute:false,
+      requiresHumanApproval:true
+    }
+  );
+
+  if(!stepUp)
+    throw new Error(
+      "RISK_STEP_UP_CREATION_FAILED"
+    );
+
+  const updated=await updateSession(
+    env.DATABASE_URL,
+    session.sessionId,
+    {
+      status:"AWAITING_STEP_UP",
+      selectedDecision:"STEP_UP",
+      stepUpRequestId:stepUp.requestId
+    }
+  );
+
+  await addEvent(
+    env.DATABASE_URL,
+    session.sessionId,
+    "RISK_STEP_UP_REQUIRED",
+    {
+      assessmentId:assessment.assessmentId,
+      trustScore:assessment.trustScore,
+      riskLevel:assessment.riskLevel,
+      requestId:stepUp.requestId,
+      additionalAuthorityRequired:0,
+      reason:
+        "HIGH_RISK_REQUIRES_EXPLICIT_HUMAN_APPROVAL"
+    }
+  );
+
+  return {
+    session:updated,
+    stepUp
+  };
+}
+
 async function ensurePayment(
   env:Env,
   job:PurchaseQueueJob
@@ -257,6 +424,57 @@ async function runPurchase(
       .slice(0,6)
       .map(candidateLine);
 
+    const assessment=await assessCurrentRisk(
+      env,
+      session,
+      run?.candidates??[]
+    );
+
+    if(
+      assessment &&
+      assessment.riskAction==="STEP_UP" &&
+      session.selectedDecision==="ALLOW"
+    ){
+      const escalated=
+        await applyHighRiskStepUp(
+          env,
+          session,
+          assessment
+        );
+
+      await reply(
+        env,
+        job,
+`🧠 *Agent evaluation*
+
+${lines.length
+  ? lines.join("\n")
+  : "Policy evaluation completed."}
+
+🎯 *Selected*
+${session.selectedProduct?.title}
+₹${session.selectedProduct?.price.toLocaleString("en-IN")}
+
+🛡️ *Adaptive Agent Trust*
+Trust score: *${assessment.trustScore}/100*
+Risk: *${assessment.riskLevel}*
+
+⚠️ *RISK STEP-UP REQUIRED*
+
+The Intent Wallet policy allowed this transaction, but behavioral risk requires explicit human approval.
+
+No additional spending authority is being requested.
+
+Reply:
+*ALLOW ONCE*
+or *REJECT*
+
+Session: ${escalated?.session?.sessionId??session.sessionId}`
+      );
+
+      return;
+    }
+
     const payment=await createPaymentLinkForSession(
       paymentEnv(env),
       session.sessionId
@@ -274,6 +492,10 @@ ${lines.length
 🎯 *Selected*
 ${session.selectedProduct?.title}
 ₹${session.selectedProduct?.price.toLocaleString("en-IN")}
+
+🛡️ *Adaptive Agent Trust*
+Trust score: *${assessment?.trustScore??"—"}/100*
+Risk: *${assessment?.riskLevel??"UNKNOWN"}*
 
 💳 *Razorpay checkout ready*
 ${payment.paymentLink?.shortUrl}
@@ -297,6 +519,15 @@ Session: ${session.sessionId}`
       .slice(0,6)
       .map(candidateLine);
 
+    const assessment=
+      selected
+        ?await assessCurrentRisk(
+          env,
+          session,
+          run?.candidates??[]
+        )
+        :null;
+
     await reply(
       env,
       job,
@@ -305,6 +536,10 @@ Session: ${session.sessionId}`
 ${lines.length
   ? lines.join("\n")
   : "Policy evaluation completed."}
+
+🛡️ *Adaptive Agent Trust*
+Trust score: *${assessment?.trustScore??"—"}/100*
+Risk: *${assessment?.riskLevel??"UNKNOWN"}*
 
 ⚠️ *STEP-UP REQUIRED*
 

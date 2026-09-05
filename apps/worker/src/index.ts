@@ -1,3 +1,4 @@
+import { handleRiskRoutes } from "./risk/routes";
 import { handlePurchaseQueue } from "./queue/purchase-jobs";
 import { handleAuthorizeRoutes } from "./authorize/routes";
 import { handleSessionPaymentRoutes } from "./session-payments/routes";
@@ -103,6 +104,14 @@ export default {
     }
 
     const url = new URL(request.url);
+
+    // V10.9 Adaptive Agent Trust & Risk Engine.
+    const riskRouteResponse = await handleRiskRoutes(
+      request,
+      env,
+      url
+    );
+    if (riskRouteResponse) return riskRouteResponse;
 
     // V10.8 external authorization control plane.
     const authorizeRouteResponse = await handleAuthorizeRoutes(
@@ -639,7 +648,7 @@ export default {
       return json({
         service: "intentlock-worker",
         status: "ok",
-        version: "v10.8.5",
+        version: "v10.9",
         databaseConfigured: Boolean(env.DATABASE_URL),
         redisConfigured: Boolean(
           env.UPSTASH_REDIS_REST_URL &&

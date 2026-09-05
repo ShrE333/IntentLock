@@ -1,77 +1,92 @@
 "use client";
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import type { ReactNode } from "react";
+import {usePathname} from "next/navigation";
+import type {ReactNode} from "react";
 
-const links = [
-  { href: "/", label: "Dashboard", icon: "⌂" },
-  { href: "/new-purchase", label: "Autonomous Purchase", icon: "✦" },
-  { href: "/wallets", label: "Intent Wallets", icon: "◈" },
-  { href: "/commerce", label: "Marketplace", icon: "⌕" },
-  { href: "/security-lab", label: "Security Lab", icon: "⚠" },
-  { href: "/evals", label: "Evaluations", icon: "▦" },
-  { href: "/audit", label: "Audit Log", icon: "▤" },
+const primary = [
+  {href:"/", label:"Overview", index:"01"},
+  {href:"/demo", label:"WhatsApp Demo", index:"02"},
+  {href:"/new-purchase", label:"New Purchase", index:"03"},
+  {href:"/wallets", label:"Intent Wallets", index:"04"},
+  {href:"/trust", label:"Trust & Risk", index:"05"},
 ];
 
-export function Shell({
-  children,
-}: {
-  children: ReactNode;
-}) {
+const secondary = [
+  {href:"/security-lab", label:"Security Lab"},
+  {href:"/evals", label:"Evaluation Suite"},
+  {href:"/audit", label:"Audit Log"},
+  {href:"/how-it-works", label:"How it works"},
+];
+
+export function Shell({children}:{children:ReactNode}) {
   const pathname = usePathname();
 
-  return (
-    <div className="appShell">
-      <aside className="sidebar">
-        <div className="brandBlock">
-          <div className="brandMark">◆</div>
+  const active = (href:string) =>
+    href === "/"
+      ? pathname === "/"
+      : pathname === href || pathname.startsWith(`${href}/`);
 
-          <div className="brandText">
-            <strong>IntentLock</strong>
-            <span>AI Payments. Locked by Trust.</span>
-          </div>
+  return (
+    <div className="appShell v1011Shell">
+      <aside className="sidebar v1011Sidebar">
+        <div className="v1011Brand">
+          <Link href="/" className="v1011BrandLock" aria-label="IntentLock home">
+            <span className="v1011BrandMark">IL</span>
+            <span>
+              <strong>IntentLock</strong>
+              <small>Transaction firewall for AI agents</small>
+            </span>
+          </Link>
         </div>
 
-        <nav className="sidebarNav">
-          {links.map((item) => {
-            const active =
-              item.href === "/"
-                ? pathname === "/"
-                : pathname === item.href ||
-                  pathname.startsWith(`${item.href}/`);
+        <nav className="v1011Nav" aria-label="Primary navigation">
+          <span className="v1011NavLabel">Product</span>
+          {primary.map(item => (
+            <Link
+              key={item.href}
+              href={item.href}
+              className={
+                active(item.href)
+                  ? "v1011NavItem v1011NavItemActive"
+                  : "v1011NavItem"
+              }
+            >
+              <span className="v1011NavIndex">{item.index}</span>
+              <span>{item.label}</span>
+            </Link>
+          ))}
 
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                className={
-                  active
-                    ? "sidebarLink sidebarLinkActive"
-                    : "sidebarLink"
-                }
-              >
-                <span className="sidebarIcon">
-                  {item.icon}
-                </span>
+          <span className="v1011NavLabel v1011NavLabelSecondary">
+            Inspect
+          </span>
 
-                <span>{item.label}</span>
-              </Link>
-            );
-          })}
+          {secondary.map(item => (
+            <Link
+              key={item.href}
+              href={item.href}
+              className={
+                active(item.href)
+                  ? "v1011NavItem v1011NavItemActive"
+                  : "v1011NavItem"
+              }
+            >
+              <span className="v1011NavIndex">—</span>
+              <span>{item.label}</span>
+            </Link>
+          ))}
         </nav>
 
-        <div className="profileCard">
-          <div className="profileAvatar">SD</div>
-
-          <div>
-            <strong>Shriram Dixit</strong>
-            <span>Builder Mode</span>
+        <div className="v1011SidebarFooter">
+          <div className="v1011LiveLine">
+            <span className="v1011LiveDot" />
+            WhatsApp demo live
           </div>
+          <p>Planned availability through 05 Oct 2026.</p>
         </div>
       </aside>
 
-      <main className="content">
+      <main className="content v1011Content">
         {children}
       </main>
     </div>
