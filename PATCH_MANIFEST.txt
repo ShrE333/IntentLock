@@ -1,0 +1,32 @@
+IntentLock V11.0 Day 1 patch
+
+NEW
+apps/worker/db/v11_0_paypal_provider.sql
+apps/worker/src/commerce/paypal-demo-catalog.ts
+apps/worker/src/commerce/paypal-demo-connector.ts
+apps/worker/src/session-payments/providers/types.ts
+apps/worker/src/session-payments/providers/paypal.ts
+apps/worker/src/session-payments/providers/index.ts
+apps/worker/src/tests/paypal.test.ts
+apps/worker/src/tests/paypal-commerce.test.ts
+UPGRADE.md
+CHANGELOG-V11.md
+PATCH_MANIFEST.txt
+
+REPLACED / UPDATED
+apps/worker/.dev.vars.example
+apps/worker/src/commerce/types.ts
+apps/worker/src/commerce/registry.ts
+apps/worker/src/session-payments/crypto.ts
+apps/worker/src/session-payments/types.ts
+apps/worker/src/session-payments/repository.ts
+apps/worker/src/session-payments/service.ts
+apps/worker/src/session-payments/routes.ts
+apps/worker/src/session-payments/proof.ts
+apps/worker/src/sessions/types.ts
+apps/worker/src/sessions/repository.ts
+apps/worker/src/tests/session-payment.test.ts
+apps/web/app/wallets/page.tsx
+apps/web/app/commerce/page.tsx
+apps/web/app/new-purchase/page.tsx
+apps/web/app/proof/[sessionId]/page.tsx

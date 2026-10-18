@@ -4,6 +4,7 @@ export type IntentWallet = {
   walletId: string;
   name: string;
   currency: string;
+  countryCode?: string;
   totalAuthority: number;
   spentAmount: number;
   autoBuyLimit: number;
@@ -24,6 +25,18 @@ export type WalletTransaction = {
   currency: string;
   quantity: number;
   features: string[];
+
+  // V11.0.1: the wallet evaluates in its own authority currency, while these
+  // fields bind the exact merchant/payment facts that produced that amount.
+  presentmentAmount?: number;
+  presentmentCurrency?: string;
+  buyerCountry?: string;
+  merchantCountry?: string;
+  fxQuoteId?: string;
+  fxRate?: number;
+  fxSource?: string;
+  fxQuotedAt?: string;
+  fxExpiresAt?: string;
 };
 
 export type WalletEvaluation = {

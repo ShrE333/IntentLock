@@ -1,5 +1,6 @@
 import {getWallet} from "../wallets/repository";
 import {evaluateWalletTransaction} from "../wallets/policy";
+import {authorizeProductContext,type AuthorizationContextEnv} from "../payments/authorization-context";
 import {connectorStatus,getCommerceConnectors} from "./registry";
 
 const headers={
@@ -11,7 +12,7 @@ const headers={
 
 const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers});
 
-type Env={
+type Env=AuthorizationContextEnv & {
   DATABASE_URL?:string;
   COMMERCE_CATALOG_URL?:string;
   SHOPIFY_STORE_DOMAIN?:string;
@@ -26,7 +27,6 @@ export async function handleCommerceRoutes(
   url:URL
 ):Promise<Response|null>{
   if(!url.pathname.startsWith("/api/commerce")) return null;
-
   if(request.method==="OPTIONS") return new Response(null,{status:204,headers});
 
   if(request.method==="GET" && url.pathname==="/api/commerce/connectors"){
@@ -34,31 +34,16 @@ export async function handleCommerceRoutes(
   }
 
   if(request.method==="GET" && url.pathname==="/api/commerce/shopify/status"){
-    const connector=getCommerceConnectors(env)
-      .find(c=>c.info().id==="shopify-storefront");
-
+    const connector=getCommerceConnectors(env).find(c=>c.info().id==="shopify-storefront");
     if(!connector){
-      return json({
-        configured:false,
-        reachable:false,
-        connector:"shopify-storefront"
-      });
+      return json({configured:false,reachable:false,connector:"shopify-storefront"});
     }
-
     try{
       const sample=await connector.search({query:"",limit:1});
-
-      return json({
-        configured:true,
-        reachable:true,
-        connector:connector.info(),
-        sampleProduct:sample[0]??null
-      });
+      return json({configured:true,reachable:true,connector:connector.info(),sampleProduct:sample[0]??null});
     }catch(error){
       return json({
-        configured:true,
-        reachable:false,
-        connector:connector.info(),
+        configured:true,reachable:false,connector:connector.info(),
         message:error instanceof Error?error.message:String(error)
       },502);
     }
@@ -66,70 +51,75 @@ export async function handleCommerceRoutes(
 
   if(request.method==="POST" && url.pathname==="/api/commerce/search"){
     if(!env.DATABASE_URL) return json({error:"DATABASE_NOT_CONFIGURED"},500);
-
     try{
       const body:any=await request.json();
       const walletId=String(body.walletId??"");
       const query=String(body.query??"").trim();
       const connectorId=String(body.connectorId??"demo-marketplace");
-
       if(!walletId) return json({error:"WALLET_ID_REQUIRED"},400);
       if(!query) return json({error:"SEARCH_QUERY_REQUIRED"},400);
 
       const wallet=await getWallet(env.DATABASE_URL,walletId);
       if(!wallet) return json({error:"WALLET_NOT_FOUND"},404);
-
-      const connector=getCommerceConnectors(env)
-        .find(c=>c.info().id===connectorId);
-
+      const connector=getCommerceConnectors(env).find(c=>c.info().id===connectorId);
       if(!connector) return json({error:"CONNECTOR_NOT_AVAILABLE"},400);
 
+      // Numeric wallet ceilings are in wallet currency and therefore MUST NOT be
+      // sent as a merchant-currency maxPrice filter. Normalize each candidate first.
       const products=await connector.search({
         query,
         category:wallet.allowedCategories[0],
         brands:wallet.allowedBrands,
-        maxPrice:wallet.maxSingleTransaction,
         requiredFeatures:wallet.requiredFeatures,
         limit:Number(body.limit??10)
       });
 
-      const candidates=products.map(product=>{
-        const evaluation=evaluateWalletTransaction(wallet,{
-          productName:product.title,
-          category:product.category,
-          brand:product.brand,
-          amount:product.price,
-          currency:product.currency,
-          quantity:1,
-          features:product.features
-        });
-
-        return {
-          product,
-          policy:{
-            decision:evaluation.decision,
-            violations:evaluation.violations,
-            reasons:evaluation.reasons,
-            additionalAuthorityRequired:evaluation.additionalAuthorityRequired,
-            canAutoExecute:evaluation.canAutoExecute,
-            requiresHumanApproval:evaluation.requiresHumanApproval
-          },
-          merchantTextTrust:"UNTRUSTED",
-          merchantMessage:product.merchantMessage??null
-        };
-      });
+      const candidates=[] as any[];
+      for(const rawProduct of products){
+        try{
+          const normalized=await authorizeProductContext(env,wallet,rawProduct);
+          const evaluation=evaluateWalletTransaction(wallet,normalized.transaction);
+          candidates.push({
+            product:normalized.product,
+            walletAmount:normalized.transaction.amount,
+            walletCurrency:normalized.transaction.currency,
+            fxQuote:normalized.context.fxQuote,
+            policy:{
+              decision:evaluation.decision,
+              violations:evaluation.violations,
+              reasons:evaluation.reasons,
+              additionalAuthorityRequired:evaluation.additionalAuthorityRequired,
+              canAutoExecute:evaluation.canAutoExecute,
+              requiresHumanApproval:evaluation.requiresHumanApproval
+            },
+            merchantTextTrust:"UNTRUSTED",
+            merchantMessage:rawProduct.merchantMessage??null
+          });
+        }catch(error){
+          candidates.push({
+            product:rawProduct,
+            walletAmount:null,
+            walletCurrency:wallet.currency,
+            fxQuote:null,
+            policy:{
+              decision:"BLOCK",violations:["FX_OR_PAYMENT_CONTEXT_UNAVAILABLE"],
+              reasons:[error instanceof Error?error.message:String(error)],
+              additionalAuthorityRequired:0,canAutoExecute:false,requiresHumanApproval:false
+            },
+            merchantTextTrust:"UNTRUSTED",
+            merchantMessage:rawProduct.merchantMessage??null
+          });
+        }
+      }
 
       return json({
         connector:connector.info(),
         wallet:{
-          walletId:wallet.walletId,
-          name:wallet.name,
-          autoBuyLimit:wallet.autoBuyLimit,
+          walletId:wallet.walletId,name:wallet.name,countryCode:wallet.countryCode,
+          currency:wallet.currency,autoBuyLimit:wallet.autoBuyLimit,
           maxSingleTransaction:wallet.maxSingleTransaction
         },
-        query,
-        count:candidates.length,
-        candidates
+        query,count:candidates.length,candidates
       });
     }catch(error){
       return json({

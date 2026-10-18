@@ -1,4 +1,5 @@
 import {canonicalJson,sha256Hex} from "../db/audit";
+import type {PaymentProviderName} from "./providers/types";
 
 const enc=(v:string)=>new TextEncoder().encode(v);
 
@@ -8,14 +9,16 @@ export async function buildSessionPaymentIdempotencyKey(input:{
   quoteHash:string;
   amount:number;
   currency:string;
+  provider?:PaymentProviderName;
 }){
   const digest=await sha256Hex([
-    "intentlock-session-payment-v1",
+    "intentlock-session-payment-v2",
+    input.provider??"razorpay",
     input.sessionId,
     input.walletId,
     input.quoteHash,
     input.amount.toFixed(2),
-    input.currency
+    input.currency.toUpperCase()
   ].join("|"));
 
   return `intentlock:session-payment:${digest}`;
@@ -23,17 +26,11 @@ export async function buildSessionPaymentIdempotencyKey(input:{
 
 export async function signProofHash(secret:string,proofHash:string){
   const key=await crypto.subtle.importKey(
-    "raw",
-    enc(secret),
-    {name:"HMAC",hash:"SHA-256"},
-    false,
-    ["sign"]
+    "raw",enc(secret),{name:"HMAC",hash:"SHA-256"},false,["sign"]
   );
 
   const sig=await crypto.subtle.sign(
-    "HMAC",
-    key,
-    enc(`intentlock-proof-v1|${proofHash}`)
+    "HMAC",key,enc(`intentlock-proof-v1|${proofHash}`)
   );
 
   return [...new Uint8Array(sig)]

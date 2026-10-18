@@ -1,9 +1,46 @@
 APPROVAL_SIGNING_SECRET=replace-with-at-least-24-random-characters
+INTENTLOCK_AUTH_SIGNING_SECRET=replace-with-a-separate-random-signing-secret
 DATABASE_URL=postgresql://USER:PASSWORD@HOST/DBNAME?sslmode=require
 
 UPSTASH_REDIS_REST_URL=https://YOUR-DATABASE.upstash.io
 UPSTASH_REDIS_REST_TOKEN=YOUR_UPSTASH_REST_TOKEN
 
+# Payment rail selection is capability-based. The first configured rail that
+# supports the merchant presentment currency/country is selected.
+PAYMENT_PROVIDER=auto
+PAYMENT_PROVIDER_ORDER=paypal,razorpay
+
+# PayPal sandbox
+PAYPAL_ENV=sandbox
+PAYPAL_CLIENT_ID=YOUR_SANDBOX_CLIENT_ID
+PAYPAL_CLIENT_SECRET=YOUR_SANDBOX_CLIENT_SECRET
+PAYPAL_WEBHOOK_ID=YOUR_PAYPAL_WEBHOOK_ID
+PAYPAL_RETURN_BASE_URL=http://localhost:3000
+# Set these to the connected PayPal seller account, not the buyer.
+# PAYPAL_ACCOUNT_COUNTRY=US
+# PAYPAL_ACCEPTED_CURRENCIES=USD,EUR,GBP,SGD,AUD,CAD,JPY
+# Optional IntentLock country policy allowlists (comma-separated ISO alpha-2).
+# PAYPAL_ALLOWED_BUYER_COUNTRIES=IN,US,GB,DE,SG
+# PAYPAL_ALLOWED_MERCHANT_COUNTRIES=IN,US,GB,DE,SG
+
+# Razorpay / alternate rail
 RAZORPAY_KEY_ID=rzp_test_xxxxxxxxxx
 RAZORPAY_KEY_SECRET=xxxxxxxxxxxxxxxx
 RAZORPAY_WEBHOOK_SECRET=choose-a-separate-random-webhook-secret
+RAZORPAY_ACCOUNT_COUNTRY=IN
+RAZORPAY_ACCEPTED_CURRENCIES=INR
+# RAZORPAY_ALLOWED_BUYER_COUNTRIES=IN
+# RAZORPAY_ALLOWED_MERCHANT_COUNTRIES=IN
+
+# FX authorization layer.
+# "static" is deterministic and stable for a hackathon demo; proof receipts label
+# it DEMO_STATIC. Use FX_RATES_JSON to supply your own rates, or "frankfurter"
+# for a live public quote source. Never present DEMO_STATIC as a live market rate.
+FX_PROVIDER=static
+FX_QUOTE_TTL_SECONDS=1800
+FX_REVALIDATE=false
+FX_MAX_DRIFT_BPS=100
+# FX_RATES_JSON={"USD":1,"INR":83.5,"EUR":0.92,"GBP":0.78,"SGD":1.35}
+
+# Used only when a commerce connector does not provide merchantCountry.
+# COMMERCE_MERCHANT_COUNTRY=US

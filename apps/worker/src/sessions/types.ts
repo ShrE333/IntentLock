@@ -1,9 +1,10 @@
 import type {CommerceProduct} from "../commerce/types";
+import type {PaymentProviderName} from "../session-payments/providers/types";
 
 export type SessionStatus =
   | "CREATED" | "SEARCHING" | "READY_TO_PAY" | "AWAITING_STEP_UP"
-  | "BLOCKED" | "REJECTED" | "PAYMENT_PENDING" | "CAPTURED"
-  | "FAILED" | "CANCELLED";
+  | "BLOCKED" | "REJECTED" | "PAYMENT_PENDING" | "PAYPAL_APPROVAL_PENDING"
+  | "AUTHORIZED" | "CAPTURE_PENDING" | "CAPTURED" | "FAILED" | "CANCELLED";
 
 export type PurchaseSession = {
   sessionId:string;
@@ -22,14 +23,18 @@ export type PurchaseSession = {
   quoteHash:string|null;
   paymentLinkUrl:string|null;
   paymentIdempotencyKey:string|null;
+  paymentProvider:PaymentProviderName|null;
+  providerOrderId:string|null;
+  providerAuthorizationId:string|null;
+  providerCaptureId:string|null;
 
+  // Kept for backwards compatibility with existing Razorpay sessions.
   razorpayPaymentLinkId:string|null;
   razorpayPaymentId:string|null;
 
   capturedAmount:number|null;
   capturedCurrency:string|null;
   capturedAt:string|null;
-
   proofReceiptId:string|null;
 
   createdAt:string;

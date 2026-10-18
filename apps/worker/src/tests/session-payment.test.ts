@@ -6,79 +6,57 @@ import {
 } from "../session-payments/crypto";
 import {buildSessionReferenceId} from "../session-payments/razorpay";
 
-describe("V10.6 PurchaseSession payment security",()=>{
-  it("builds a deterministic payment idempotency key",async()=>{
+describe("V11 PurchaseSession payment security",()=>{
+  it("builds a deterministic provider-bound payment idempotency key",async()=>{
     const input={
-      sessionId:"ps_test",
-      walletId:"iw_test",
-      quoteHash:"a".repeat(64),
-      amount:5899,
-      currency:"INR"
+      sessionId:"ps_test",walletId:"iw_test",quoteHash:"a".repeat(64),
+      amount:49,currency:"USD",provider:"paypal" as const
     };
-
     const a=await buildSessionPaymentIdempotencyKey(input);
     const b=await buildSessionPaymentIdempotencyKey(input);
-
     expect(a).toBe(b);
     expect(a.startsWith("intentlock:session-payment:")).toBe(true);
   });
 
-  it("changes the idempotency key if the exact quote changes",async()=>{
+  it("changes the key when the quote or payment rail changes",async()=>{
     const base={
-      sessionId:"ps_test",
-      walletId:"iw_test",
-      quoteHash:"a".repeat(64),
-      amount:5899,
-      currency:"INR"
+      sessionId:"ps_test",walletId:"iw_test",quoteHash:"a".repeat(64),
+      amount:49,currency:"USD",provider:"paypal" as const
     };
-
     const original=await buildSessionPaymentIdempotencyKey(base);
-    const changed=await buildSessionPaymentIdempotencyKey({
-      ...base,
-      quoteHash:"b".repeat(64)
+    const changedQuote=await buildSessionPaymentIdempotencyKey({...base,quoteHash:"b".repeat(64)});
+    const changedRail=await buildSessionPaymentIdempotencyKey({
+      ...base,currency:"INR",amount:5899,provider:"razorpay" as const
     });
-
-    expect(original).not.toBe(changed);
+    expect(original).not.toBe(changedQuote);
+    expect(original).not.toBe(changedRail);
   });
 
-  it("creates a short deterministic Razorpay reference id",async()=>{
+  it("preserves deterministic Razorpay reference IDs for the legacy rail",async()=>{
     const key=await buildSessionPaymentIdempotencyKey({
-      sessionId:"ps_test",
-      walletId:"iw_test",
-      quoteHash:"a".repeat(64),
-      amount:5899,
-      currency:"INR"
+      sessionId:"ps_test",walletId:"iw_test",quoteHash:"a".repeat(64),
+      amount:5899,currency:"INR",provider:"razorpay"
     });
-
     const refA=buildSessionReferenceId(key);
     const refB=buildSessionReferenceId(key);
-
     expect(refA).toBe(refB);
     expect(refA.startsWith("ilps_")).toBe(true);
     expect(refA.length).toBeLessThanOrEqual(29);
   });
 
-  it("proof hash changes when payment evidence changes",async()=>{
-    const base={
-      sessionId:"ps_test",
-      payment:{amount:5899,paymentId:"pay_1"},
-      wallet:{remainingAuthority:4101}
-    };
-
+  it("changes proof hash if payment evidence changes",async()=>{
+    const base={sessionId:"ps_test",payment:{provider:"paypal",amount:49,captureId:"CAP-1"}};
     const original=await buildProofHash(base);
     const changed=await buildProofHash({
-      ...base,
-      payment:{amount:5900,paymentId:"pay_1"}
+      ...base,payment:{provider:"paypal",amount:50,captureId:"CAP-1"}
     });
-
     expect(original).not.toBe(changed);
   });
 
   it("signs the proof hash deterministically with domain separation",async()=>{
-    const hash=await buildProofHash({sessionId:"ps_test",amount:5899});
+    const hash=await buildProofHash({sessionId:"ps_test",amount:49});
     const a=await signProofHash("test-secret",hash);
     const b=await signProofHash("test-secret",hash);
-
     expect(a).toBe(b);
     expect(a).toMatch(/^[a-f0-9]{64}$/);
   });

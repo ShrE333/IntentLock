@@ -6,7 +6,8 @@ const num=(v:unknown)=>Number(v);
 
 function mapWallet(r:any):IntentWallet{
   return {
-    walletId:String(r.wallet_id), name:String(r.name), currency:String(r.currency),
+    walletId:String(r.wallet_id), name:String(r.name), currency:String(r.currency).toUpperCase(),
+    countryCode:String(r.country_code??"IN").toUpperCase(),
     totalAuthority:num(r.total_authority), spentAmount:num(r.spent_amount),
     autoBuyLimit:num(r.auto_buy_limit), maxSingleTransaction:num(r.max_single_transaction),
     allowedCategories:arr(r.allowed_categories), allowedBrands:arr(r.allowed_brands),
@@ -21,10 +22,10 @@ export async function createWallet(db:string,input:any){
   const id=`iw_${crypto.randomUUID()}`;
   const rows=await sql`
     INSERT INTO intent_wallets(
-      wallet_id,name,currency,total_authority,auto_buy_limit,max_single_transaction,
+      wallet_id,name,currency,country_code,total_authority,auto_buy_limit,max_single_transaction,
       allowed_categories,allowed_brands,blocked_brands,required_features,valid_until
     ) VALUES(
-      ${id},${input.name},${input.currency},${input.totalAuthority},
+      ${id},${input.name},${input.currency},${input.countryCode??"IN"},${input.totalAuthority},
       ${input.autoBuyLimit},${input.maxSingleTransaction},
       ${JSON.stringify(input.allowedCategories)}::jsonb,
       ${JSON.stringify(input.allowedBrands)}::jsonb,

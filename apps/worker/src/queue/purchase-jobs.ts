@@ -7,7 +7,10 @@ import {
   updateSession
 } from "../sessions/repository";
 import {
-  createPaymentLinkForSession
+  createPaymentLinkForSession,
+  finalizePayPalCaptureJob,
+  type SessionPaymentEnv,
+  type PayPalSettlementJob
 } from "../session-payments/service";
 import {
   assessSessionRisk
@@ -22,7 +25,7 @@ import {
   sendWahaText
 } from "../whatsapp/waha-client";
 
-export type PurchaseQueueJob =
+type InteractivePurchaseJob =
   | {
       kind:"RUN_PURCHASE";
       sessionId:string;
@@ -36,7 +39,9 @@ export type PurchaseQueueJob =
       wahaSession:string;
     };
 
-type Env={
+export type PurchaseQueueJob = InteractivePurchaseJob | PayPalSettlementJob;
+
+type Env=SessionPaymentEnv & {
   DATABASE_URL:string;
   APPROVAL_SIGNING_SECRET?:string;
 
@@ -70,7 +75,7 @@ type QueueBatchLike={
 
 async function reply(
   env:Env,
-  job:PurchaseQueueJob,
+  job:InteractivePurchaseJob,
   text:string
 ){
   await sendWahaText({
@@ -316,7 +321,7 @@ async function applyHighRiskStepUp(
 
 async function ensurePayment(
   env:Env,
-  job:PurchaseQueueJob
+  job:InteractivePurchaseJob
 ){
   const session=await getSession(
     env.DATABASE_URL,
@@ -622,7 +627,7 @@ export function isNonRetryable(error:unknown){
 
 async function notifyTerminalFailure(
   env:Env,
-  job:PurchaseQueueJob,
+  job:InteractivePurchaseJob,
   error:unknown
 ){
   const message=
@@ -664,7 +669,7 @@ Session: ${job.sessionId}`;
 
 async function processJob(
   env:Env,
-  job:PurchaseQueueJob
+  job:InteractivePurchaseJob
 ){
   if(job.kind==="RUN_PURCHASE"){
     await runPurchase(env,job);
@@ -692,6 +697,20 @@ export async function handlePurchaseQueue(
   _ctx:unknown
 ){
   for(const message of batch.messages){
+    // Settlement errors must stay retryable; they must never enter the purchase
+    // failure path or send a misleading "no money moved" WhatsApp notification.
+    if(message.body.kind==="FINALIZE_PAYPAL_CAPTURE"){
+      try{
+        await finalizePayPalCaptureJob(env,message.body);
+        message.ack();
+      }catch{
+        console.error("PAYPAL_WEBHOOK_PROCESSING_ERROR",{
+          stage:"QUEUE_SETTLEMENT",payloadHash:message.body.payloadHash,attempts:message.attempts
+        });
+        message.retry({delaySeconds:Math.min(30,Math.max(2,message.attempts*3))});
+      }
+      continue;
+    }
     try{
       await processJob(
         env,

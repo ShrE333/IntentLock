@@ -5,7 +5,7 @@ import {getSession} from "../sessions/repository";
 import {
   getOneTimeAuthorization,
   getProofReceipt,
-  getSessionPaymentLink,
+  getSessionPayment,
   getWalletLedgerForSession,
   persistProofReceipt,
   setSessionProofReceipt
@@ -13,13 +13,13 @@ import {
 import {buildProofHash,signProofHash} from "./crypto";
 import {appendSessionAuditEvent} from "./audit";
 
-export async function createProofReceipt(
-  db:string,
-  signingSecret:string,
-  sessionId:string
-){
+export async function createProofReceipt(db:string,signingSecret:string,sessionId:string){
   const existing=await getProofReceipt(db,sessionId);
-  if(existing) return existing;
+  if(existing){
+    // Recover a crash after receipt insertion but before session attachment.
+    await setSessionProofReceipt(db,sessionId,existing.receiptId);
+    return existing;
+  }
 
   const session=await getSession(db,sessionId);
   if(!session) throw new Error("SESSION_NOT_FOUND");
@@ -29,8 +29,8 @@ export async function createProofReceipt(
   const wallet=await getWallet(db,session.walletId);
   if(!wallet) throw new Error("WALLET_NOT_FOUND");
 
-  const payment=await getSessionPaymentLink(db,sessionId);
-  if(!payment||payment.status!=="paid")
+  const payment=await getSessionPayment(db,sessionId);
+  if(!payment||payment.status!=="COMPLETED")
     throw new Error("CAPTURED_PAYMENT_RECORD_NOT_FOUND");
 
   const ledger:any=await getWalletLedgerForSession(db,sessionId);
@@ -40,21 +40,17 @@ export async function createProofReceipt(
     ? await getOneTimeAuthorization(db,session.authorizationId)
     : null;
 
-  const auditRows=await getAuditEvents(
-    getDb({DATABASE_URL:db}),
-    sessionId
-  );
+  const auditRows=await getAuditEvents(getDb({DATABASE_URL:db}),sessionId);
   const auditVerification=await verifyAuditRows(auditRows);
   if(!auditVerification.valid)
     throw new Error(`AUDIT_CHAIN_INVALID:${auditVerification.reason}`);
 
   const evidenceAuditHeadHash=auditVerification.headHash??null;
-
   const walletSpent=Number(wallet.spentAmount);
-  const paidAmount=Number(payment.amount);
+  const paymentContext=session.selectedProduct.authorizationContext??null;
 
   const payload={
-    version:"intentlock-proof-v1",
+    version:"intentlock-proof-v1.2",
     generatedAt:new Date().toISOString(),
 
     session:{
@@ -67,6 +63,7 @@ export async function createProofReceipt(
     wallet:{
       walletId:wallet.walletId,
       name:wallet.name,
+      countryCode:wallet.countryCode??"IN",
       currency:wallet.currency,
       totalAuthority:wallet.totalAuthority,
       spentAmountAfter:walletSpent,
@@ -78,16 +75,26 @@ export async function createProofReceipt(
       title:session.selectedProduct.title,
       brand:session.selectedProduct.brand,
       merchant:session.selectedProduct.merchant,
+      merchantCountry:session.selectedProduct.merchantCountry??paymentContext?.merchantCountry??null,
       amount:session.selectedProduct.price,
       currency:session.selectedProduct.currency,
       features:session.selectedProduct.features
     },
 
+    paymentContext:{
+      buyerCountry:paymentContext?.buyerCountry??wallet.countryCode??"IN",
+      merchantCountry:paymentContext?.merchantCountry??session.selectedProduct.merchantCountry??null,
+      presentmentAmount:paymentContext?.presentmentAmount??payment.amount,
+      presentmentCurrency:paymentContext?.presentmentCurrency??payment.currency,
+      walletAmount:paymentContext?.walletAmount??Number(ledger.amount),
+      walletCurrency:paymentContext?.walletCurrency??String(ledger.currency),
+      fxQuote:paymentContext?.fxQuote??null,
+      fxBound:Boolean(paymentContext?.fxQuote)
+    },
+
     authorization:{
       policyDecision:session.selectedDecision,
-      mode:authorization
-        ? "SIGNED_ONE_TIME_AUTHORIZATION"
-        : "INTENT_WALLET_POLICY_AT_EXECUTION",
+      mode:authorization?"SIGNED_ONE_TIME_AUTHORIZATION":"INTENT_WALLET_POLICY_AT_EXECUTION",
       stepUpRequestId:session.stepUpRequestId,
       authorizationId:session.authorizationId,
       quoteHash:session.quoteHash,
@@ -99,19 +106,22 @@ export async function createProofReceipt(
     },
 
     payment:{
-      provider:"razorpay",
-      providerLinkId:payment.providerLinkId,
-      providerPaymentId:payment.providerPaymentId,
+      provider:payment.provider,
+      providerOrderId:payment.providerOrderId,
+      providerAuthorizationId:payment.providerAuthorizationId,
+      providerCaptureId:payment.providerCaptureId,
       amount:payment.amount,
       currency:payment.currency,
       status:payment.status,
       capturedAt:payment.capturedAt,
       webhookSignatureVerified:true,
-      idempotencyKey:session.paymentIdempotencyKey
+      idempotencyKey:payment.idempotencyKey,
+      capturedStateSource:"VERIFIED_PROVIDER_WEBHOOK"
     },
 
     walletSpend:{
       ledgerId:String(ledger.ledger_id),
+      provider:String(ledger.provider),
       amount:Number(ledger.amount),
       currency:String(ledger.currency),
       appliedAt:new Date(String(ledger.applied_at)).toISOString(),
@@ -130,22 +140,15 @@ export async function createProofReceipt(
   const receiptId=`pr_${crypto.randomUUID()}`;
 
   const receipt=await persistProofReceipt(db,{
-    receiptId,
-    sessionId,
-    walletId:wallet.walletId,
-    payload,
-    proofHash,
-    proofSignature,
-    evidenceAuditHeadHash
+    receiptId,sessionId,walletId:wallet.walletId,payload,proofHash,
+    proofSignature,evidenceAuditHeadHash
   });
 
   await setSessionProofReceipt(db,sessionId,receipt.receiptId);
-
   await appendSessionAuditEvent(db,sessionId,"PROOF_RECEIPT_CREATED",{
-    receiptId:receipt.receiptId,
-    proofHash,
-    proofSignature,
-    evidenceAuditHeadHash
+    receiptId:receipt.receiptId,proofHash:receipt.proofHash,proofSignature:receipt.proofSignature,
+    evidenceAuditHeadHash:receipt.evidenceAuditHeadHash,
+    paymentProvider:payment.provider
   });
 
   return receipt;
@@ -155,10 +158,7 @@ export async function getVerifiedProofReceipt(db:string,sessionId:string){
   const receipt=await getProofReceipt(db,sessionId);
   if(!receipt) return null;
 
-  const rows=await getAuditEvents(
-    getDb({DATABASE_URL:db}),
-    sessionId
-  );
+  const rows=await getAuditEvents(getDb({DATABASE_URL:db}),sessionId);
   const auditVerification=await verifyAuditRows(rows);
 
   return {
@@ -166,9 +166,7 @@ export async function getVerifiedProofReceipt(db:string,sessionId:string){
     verification:{
       auditChainValid:auditVerification.valid,
       checkedEvents:auditVerification.checkedEvents,
-      currentAuditHeadHash:auditVerification.valid
-        ? auditVerification.headHash??null
-        : null,
+      currentAuditHeadHash:auditVerification.valid?auditVerification.headHash??null:null,
       evidenceAuditHeadHash:receipt.evidenceAuditHeadHash,
       proofHash:receipt.proofHash,
       signaturePresent:Boolean(receipt.proofSignature)

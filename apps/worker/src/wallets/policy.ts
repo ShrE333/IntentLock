@@ -2,6 +2,7 @@ import type {IntentWallet, WalletTransaction, WalletEvaluation} from "./types";
 
 const norm=(s:string)=>s.trim().toLowerCase();
 const has=(xs:string[],x:string)=>xs.map(norm).includes(norm(x));
+const amountLabel=(amount:number,currency:string)=>`${currency.toUpperCase()} ${amount.toFixed(2)}`;
 
 export function evaluateWalletTransaction(
   wallet:IntentWallet,
@@ -14,7 +15,10 @@ export function evaluateWalletTransaction(
 
   if(wallet.status!=="ACTIVE"){violations.push("WALLET_REVOKED");reasons.push("Wallet is revoked.");}
   if(new Date(wallet.validUntil).getTime()<=now.getTime()){violations.push("WALLET_EXPIRED");reasons.push("Wallet authority has expired.");}
-  if(tx.currency.toUpperCase()!==wallet.currency.toUpperCase()){violations.push("CURRENCY_MISMATCH");}
+  if(tx.currency.toUpperCase()!==wallet.currency.toUpperCase()){
+    violations.push("CURRENCY_MISMATCH");
+    reasons.push("Transaction must be normalized into the wallet authority currency before policy evaluation.");
+  }
   if(tx.amount>wallet.maxSingleTransaction){violations.push("MAX_SINGLE_TRANSACTION_EXCEEDED");}
   if(tx.amount>remaining){violations.push("REMAINING_AUTHORITY_EXCEEDED");}
   if(wallet.allowedCategories.length && !has(wallet.allowedCategories,tx.category)){violations.push("CATEGORY_NOT_ALLOWED");}
@@ -33,7 +37,7 @@ export function evaluateWalletTransaction(
     const extra=tx.amount-wallet.autoBuyLimit;
     return {
       decision:"STEP_UP",violations:[],
-      reasons:[`Valid transaction, but ₹${extra} additional one-time authority is required.`],
+      reasons:[`Valid transaction, but ${amountLabel(extra,wallet.currency)} additional one-time authority is required.`],
       remainingAuthority:remaining,requestedAmount:tx.amount,
       additionalAuthorityRequired:extra,canAutoExecute:false,requiresHumanApproval:true
     };
