@@ -290,7 +290,7 @@ export async function handleTrustCenterRoutes(
         .filter(Boolean)
         .slice(0,6);
       return json({
-        version:"v11.4",
+        version:"v11.4.1",
         product:"IntentLock TrustOps",
         features:{disputeDefense:true,reconciliationWatchdog:true,payeeLock:true,refundFirewall:true,paypalDisputes:true},
         reconciliation:scan.counts,

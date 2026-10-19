@@ -1,6 +1,7 @@
 import type {RefundPolicyInput,RefundPolicyResult} from "./types";
 
 const EPS=0.000001;
+const roundMoney=(value:number)=>Math.round((value+Number.EPSILON)*100)/100;
 
 export function evaluateRefundPolicy(input:RefundPolicyInput):RefundPolicyResult{
   const violations:string[]=[];
@@ -56,13 +57,28 @@ export function calculateWalletRefundCredit(input:{
   requestedPresentmentAmount:number;
   originalPresentmentAmount:number;
   originalWalletDebit:number;
+  alreadyReservedPresentmentAmount?:number;
+  alreadyReservedWalletCreditAmount?:number;
 }){
   if(input.originalPresentmentAmount<=0||input.originalWalletDebit<=0)
     throw new Error("INVALID_ORIGINAL_PAYMENT_CONTEXT");
+
+  const alreadyPresentment=Math.max(0,Number(input.alreadyReservedPresentmentAmount??0));
+  const alreadyWalletCredit=Math.max(0,Number(input.alreadyReservedWalletCreditAmount??0));
+  const presentmentRemaining=Math.max(0,input.originalPresentmentAmount-alreadyPresentment);
+  const walletCreditRemaining=Math.max(0,roundMoney(input.originalWalletDebit-alreadyWalletCredit));
   const ratio=input.requestedPresentmentAmount/input.originalPresentmentAmount;
+
   if(!Number.isFinite(ratio)||ratio<=0||ratio>1.000001)
     throw new Error("INVALID_REFUND_RATIO");
-  // Wallets currently use NUMERIC(14,2). Restore authority using the exact
-  // historical authorization ratio, never a new FX quote.
-  return Math.round(input.originalWalletDebit*ratio*100)/100;
+
+  // Close the final partial refund against the exact historical wallet debit.
+  // This prevents 1-cent residue from independently rounded partial refunds.
+  if(
+    input.requestedPresentmentAmount<=presentmentRemaining+EPS &&
+    Math.abs(input.requestedPresentmentAmount-presentmentRemaining)<=EPS
+  ) return walletCreditRemaining;
+
+  const proportional=roundMoney(input.originalWalletDebit*ratio);
+  return Math.min(proportional,walletCreditRemaining);
 }

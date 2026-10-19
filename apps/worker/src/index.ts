@@ -1,3 +1,4 @@
+import {CORS_ALLOWED_HEADERS,globalPreflightResponse} from "./http/cors";
 import { handleRiskRoutes } from "./risk/routes";
 import { handlePurchaseQueue } from "./queue/purchase-jobs";
 import { handleAuthorizeRoutes } from "./authorize/routes";
@@ -68,7 +69,7 @@ function json(data: unknown, status = 200) {
     headers: {
       "content-type": "application/json; charset=utf-8",
       "access-control-allow-origin": "*",
-      "access-control-allow-headers": "content-type,x-razorpay-signature",
+      "access-control-allow-headers": CORS_ALLOWED_HEADERS,
       "access-control-allow-methods": "GET,POST,OPTIONS"
     }
   });
@@ -92,16 +93,7 @@ export default {
   async fetch(request: Request, rawEnv: Env): Promise<Response> {
     const env = rawEnv as AppEnv;
 
-    if (request.method === "OPTIONS") {
-      return new Response(null, {
-        status: 204,
-        headers: {
-          "access-control-allow-origin": "*",
-          "access-control-allow-headers": "content-type,x-razorpay-signature",
-          "access-control-allow-methods": "GET,POST,OPTIONS"
-        }
-      });
-    }
+    if (request.method === "OPTIONS") return globalPreflightResponse();
 
     const url = new URL(request.url);
 

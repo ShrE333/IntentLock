@@ -9,9 +9,9 @@ import {sha256Hex} from "../wallets/crypto";
 import {calculateWalletRefundCredit,evaluateRefundPolicy} from "./policy";
 import {
   applyWalletRefundOnce,getRefundById,getRefundByIdempotencyKey,listSessionRefunds,
-  markRefundCompleted,markRefundFailed,markRefundProviderAccepted,reserveRefund,sumReservedRefundAmount
+  markRefundCompleted,markRefundFailed,markRefundProviderAccepted,reserveRefund
 } from "./repository";
-import type {RefundReason} from "./types";
+import type {RefundReason,RefundRecord} from "./types";
 
 export type PostPurchaseEnv=PayPalEnv & {
   DATABASE_URL?:string;
@@ -19,6 +19,8 @@ export type PostPurchaseEnv=PayPalEnv & {
   REFUND_MAX_AGE_DAYS?:string;
   REFUND_BLOCK_ON_OPEN_DISPUTE?:string;
 };
+
+export type PayPalMutationFailureDisposition="DEFINITIVE"|"UNCERTAIN";
 
 const requireDb=(env:PostPurchaseEnv)=>{
   if(!env.DATABASE_URL) throw new Error("DATABASE_NOT_CONFIGURED");
@@ -35,23 +37,64 @@ const validReason=(v:unknown):RefundReason=>{
   throw new Error("INVALID_REFUND_REASON");
 };
 
+/**
+ * A network error, OAuth failure, timeout, 5xx, rate limit or conflict does not
+ * prove whether PayPal created a refund. Keep the local reservation REQUESTED
+ * and retry with the same PayPal-Request-Id. Only a stable client-side 4xx is
+ * treated as a definitive rejection.
+ */
+export function classifyPayPalMutationFailure(error:unknown):PayPalMutationFailureDisposition{
+  const message=error instanceof Error?error.message:String(error);
+  const match=/^PAYPAL_(\d{3}):/.exec(message);
+  if(!match) return "UNCERTAIN";
+  const status=Number(match[1]);
+  if(status>=500||[408,409,425,429].includes(status)) return "UNCERTAIN";
+  return "DEFINITIVE";
+}
+
+export function canRetryReservedRefund(refund:Pick<RefundRecord,"status">){
+  return refund.status==="REQUESTED";
+}
+
+export function summarizeActiveRefundReservations(
+  refunds:RefundRecord[],
+  excludeRefundId?:string
+){
+  const active=refunds.filter(r=>
+    !["FAILED","CANCELLED"].includes(r.status) &&
+    r.refundId!==excludeRefundId
+  );
+  return {
+    presentmentAmount:active.reduce((sum,r)=>sum+Number(r.amount||0),0),
+    walletCreditAmount:active.reduce((sum,r)=>sum+Number(r.walletCreditAmount||0),0)
+  };
+}
+
 async function openDisputesForCapture(env:PostPurchaseEnv,captureId:string){
   if(!blockOnDispute(env)) return [];
   const disputes=await listPayPalDisputes(env,captureId);
   return disputes.filter((d:any)=>String(d.status??"").toUpperCase()!=="RESOLVED");
 }
 
-export async function evaluateSessionRefund(env:PostPurchaseEnv,sessionId:string,input:{amount:number;currency?:string;reason?:string}){
+export async function evaluateSessionRefund(
+  env:PostPurchaseEnv,
+  sessionId:string,
+  input:{amount:number;currency?:string;reason?:string},
+  options:{excludeRefundId?:string}={}
+){
   const db=requireDb(env);
-  const [session,payment,ledger,refunds,reserved]=await Promise.all([
+  const [session,payment,ledger,refunds]=await Promise.all([
     getSession(db,sessionId),getSessionPayment(db,sessionId),getWalletLedgerForSession(db,sessionId),
-    listSessionRefunds(db,sessionId),sumReservedRefundAmount(db,sessionId)
+    listSessionRefunds(db,sessionId)
   ]);
   if(!session) throw new Error("SESSION_NOT_FOUND");
   if(!payment) throw new Error("SESSION_PAYMENT_NOT_FOUND");
   if(!ledger) throw new Error("ORIGINAL_WALLET_LEDGER_NOT_FOUND");
   if(!payment.providerCaptureId) throw new Error("PROVIDER_CAPTURE_ID_MISSING");
 
+  const reservationSummary=summarizeActiveRefundReservations(refunds,options.excludeRefundId);
+  const reserved=reservationSummary.presentmentAmount;
+  const reservedWalletCredit=reservationSummary.walletCreditAmount;
   const amount=Number(input.amount);
   const currency=String(input.currency??payment.currency).toUpperCase();
   const openDisputes=payment.provider==="paypal"
@@ -70,7 +113,11 @@ export async function evaluateSessionRefund(env:PostPurchaseEnv,sessionId:string
   let walletCreditAmount=0;
   if(Number.isFinite(amount)&&amount>0&&originalPresentmentAmount>0&&originalWalletDebit>0){
     walletCreditAmount=calculateWalletRefundCredit({
-      requestedPresentmentAmount:amount,originalPresentmentAmount,originalWalletDebit
+      requestedPresentmentAmount:amount,
+      originalPresentmentAmount,
+      originalWalletDebit,
+      alreadyReservedPresentmentAmount:reserved,
+      alreadyReservedWalletCreditAmount:reservedWalletCredit
     });
   }
   const reason=validReason(input.reason);
@@ -85,27 +132,46 @@ export async function evaluateSessionRefund(env:PostPurchaseEnv,sessionId:string
 
 export async function requestSessionRefund(env:PostPurchaseEnv,sessionId:string,input:{amount:number;currency?:string;reason?:string}){
   const db=requireDb(env);
-  const evaluation=await evaluateSessionRefund(env,sessionId,input);
+
+  // Build the logical refund identity before evaluation so an existing uncertain
+  // reservation can be excluded from its own cumulative-refund calculation.
+  const [session,payment]=await Promise.all([
+    getSession(db,sessionId),getSessionPayment(db,sessionId)
+  ]);
+  if(!session) throw new Error("SESSION_NOT_FOUND");
+  if(!payment) throw new Error("SESSION_PAYMENT_NOT_FOUND");
+  if(!payment.providerCaptureId) throw new Error("PROVIDER_CAPTURE_ID_MISSING");
+
+  const amount=Number(input.amount);
+  const currency=String(input.currency??payment.currency).toUpperCase();
+  const reason=validReason(input.reason);
+  const key=await sha256Hex(JSON.stringify({
+    version:"intentlock-refund-v11.4",sessionId,captureId:payment.providerCaptureId,
+    amount,currency,reason
+  }));
+
+  const existing=await getRefundByIdempotencyKey(db,key);
+  if(existing&&!canRetryReservedRefund(existing))
+    return {duplicate:true,retriedProviderRequest:false,refund:existing,evaluation:null};
+
+  const evaluation=await evaluateSessionRefund(
+    env,sessionId,{amount,currency,reason},
+    {excludeRefundId:existing?.refundId}
+  );
   if(evaluation.policy.decision!=="ALLOW")
     throw new Error(`REFUND_POLICY_BLOCKED:${evaluation.policy.violations.join(",")}`);
 
-  const session=await getSession(db,sessionId);
-  if(!session) throw new Error("SESSION_NOT_FOUND");
-  const key=await sha256Hex(JSON.stringify({
-    version:"intentlock-refund-v11.4",sessionId,captureId:evaluation.capture.captureId,
-    amount:evaluation.requested.amount,currency:evaluation.requested.currency,reason:evaluation.reason
-  }));
-  const existing=await getRefundByIdempotencyKey(db,key);
-  if(existing) return {duplicate:true,refund:existing,evaluation};
-
-  const refundId=`rf_${crypto.randomUUID()}`;
-  const reserved=await reserveRefund(db,{
+  const refundId=existing?.refundId??`rf_${crypto.randomUUID()}`;
+  const reserved=existing??await reserveRefund(db,{
     refundId,sessionId,walletId:session.walletId,provider:"paypal",providerCaptureId:evaluation.capture.captureId,
     idempotencyKey:key,reason:evaluation.reason,amount:evaluation.requested.amount,currency:evaluation.requested.currency,
     walletCreditAmount:evaluation.walletCredit.amount,walletCreditCurrency:evaluation.walletCredit.currency
   });
 
   try{
+    // Retrying an uncertain REQUESTED row intentionally uses the exact same
+    // PayPal-Request-Id. PayPal can return the original mutation result instead
+    // of creating another logical refund.
     const provider=await createPayPalRefund(
       env,evaluation.capture.captureId,evaluation.requested.amount,evaluation.requested.currency,`refund-${key}`
     );
@@ -115,16 +181,34 @@ export async function requestSessionRefund(env:PostPurchaseEnv,sessionId:string,
     await addEvent(db,sessionId,"REFUND_REQUESTED",{
       refundId,provider:"paypal",providerRefundId:provider.refundId,
       amount:evaluation.requested.amount,currency:evaluation.requested.currency,
-      walletCreditAmount:evaluation.walletCredit.amount,walletCreditCurrency:evaluation.walletCredit.currency,
-      reason:evaluation.reason,idempotencyKey:key
+      walletCreditAmount:reserved.walletCreditAmount,walletCreditCurrency:reserved.walletCreditCurrency,
+      reason:evaluation.reason,idempotencyKey:key,retriedProviderRequest:Boolean(existing)
     });
     await appendSessionAuditEvent(db,sessionId,"REFUND_REQUESTED",{
       refundId,providerRefundId:provider.refundId,amount:evaluation.requested.amount,
-      currency:evaluation.requested.currency,reason:evaluation.reason,idempotencyKey:key
+      currency:evaluation.requested.currency,reason:evaluation.reason,idempotencyKey:key,
+      retriedProviderRequest:Boolean(existing)
     });
-    return {duplicate:false,refund:saved??reserved,evaluation,provider};
+    return {duplicate:Boolean(existing),retriedProviderRequest:Boolean(existing),refund:saved??reserved,evaluation,provider};
   }catch(error){
-    await markRefundFailed(db,refundId,error instanceof Error?error.message:String(error));
+    const message=error instanceof Error?error.message:String(error);
+    const disposition=classifyPayPalMutationFailure(error);
+
+    if(disposition==="UNCERTAIN"){
+      // Deliberately leave the reservation in REQUESTED. Marking this FAILED
+      // would convert an unknown provider outcome into a false financial fact.
+      await addEvent(db,sessionId,"REFUND_PROVIDER_STATE_UNCERTAIN",{
+        refundId,idempotencyKey:key,message,
+        action:"RETRY_SAME_PAYPAL_REQUEST_ID"
+      });
+      await appendSessionAuditEvent(db,sessionId,"REFUND_PROVIDER_STATE_UNCERTAIN",{
+        refundId,idempotencyKey:key,message,
+        action:"RETRY_SAME_PAYPAL_REQUEST_ID"
+      });
+      throw new Error(`REFUND_PROVIDER_STATE_UNCERTAIN:${message}`);
+    }
+
+    await markRefundFailed(db,refundId,message);
     throw error;
   }
 }

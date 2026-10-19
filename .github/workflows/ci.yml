@@ -1,0 +1,37 @@
+name: IntentLock CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Worker tests
+        run: npm test
+
+      - name: Next.js production build
+        run: npm --workspace apps/web run build
+
+      - name: Cloudflare Worker dry-run
+        working-directory: apps/worker
+        run: npx wrangler deploy --dry-run --outdir .wrangler/ci-dry-run

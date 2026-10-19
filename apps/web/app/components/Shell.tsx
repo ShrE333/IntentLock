@@ -53,7 +53,7 @@ export function Shell({children}:{children:ReactNode}) {
 
         <div className={styles.versionPill}>
           <span className={styles.liveDot}/>
-          <span>V11.4 · Post-purchase guard</span>
+          <span>V11.4.1 · Reliability hardening</span>
         </div>
 
         <nav className={styles.nav} aria-label="Primary navigation">
@@ -105,7 +105,7 @@ export function Shell({children}:{children:ReactNode}) {
             <span className={styles.liveDot}/>
             <span>Control plane online</span>
             <span className={styles.topbarDivider}/>
-            <span className={styles.topbarVersion}>V11.4</span>
+            <span className={styles.topbarVersion}>V11.4.1</span>
           </div>
         </header>
         <main className={styles.content}>{children}</main>

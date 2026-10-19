@@ -1,0 +1,27 @@
+IntentLock V11.4.1 — Reliability & Repo Integrity
+Base: c0260bf39786378e5c6a8fcd0805025423a626db
+
+REPLACE
+README.md
+apps/worker/src/post-purchase/policy.ts
+apps/worker/src/post-purchase/service.ts
+
+ADD
+.github/workflows/ci.yml
+apps/worker/src/tests/refund-reliability.test.ts
+apps/worker/src/tests/trustops-cors.test.ts
+CHANGELOG-V11.4.1.md
+UPGRADE-V11.4.1.md
+PATCH_MANIFEST-V11.4.1.txt
+apply-v11-4-1.mjs
+
+IN-PLACE EDIT BY apply-v11-4-1.mjs
+apps/worker/src/index.ts
+apps/worker/src/trust-center/routes.ts
+apps/web/app/components/Shell.tsx
+apps/web/app/post-purchase/page.tsx
+
+DELETE BY apply-v11-4-1.mjs
+lkdvm
+
+NO DATABASE MIGRATION.
