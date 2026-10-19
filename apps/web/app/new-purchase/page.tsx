@@ -15,10 +15,10 @@ type PaymentAuthorizationContext={
 };
 type Wallet={
   walletId:string;name:string;countryCode:string;currency:string;totalAuthority:number;spentAmount:number;
-  autoBuyLimit:number;maxSingleTransaction:number;allowedBrands:string[];
-  blockedBrands:string[];requiredFeatures:string[];
+  autoBuyLimit:number;maxSingleTransaction:number;allowedCategories:string[];allowedBrands:string[];
+  blockedBrands:string[];requiredFeatures:string[];validUntil:string;status:"ACTIVE"|"REVOKED";
 };
-type Connector={id:string;name:string;enabled:boolean;};
+type Connector={id:string;name:string;kind:string;enabled:boolean;description?:string;};
 type Product={
   id:string;title:string;brand:string;category:string;merchant:string;merchantCountry?:string;
   price:number;currency:string;features:string[];merchantMessage?:string;
@@ -47,36 +47,64 @@ type Payment={
 type RunResult={session:Session;events:Event[];candidates:Candidate[];};
 
 const pretty=(type:string)=>type.replaceAll("_"," ");
-const money=(n:number,currency?:string|null)=>{
-  const code=String(currency??"").trim().toUpperCase();
-  const amount=Number.isFinite(Number(n))?Number(n):0;
-  const zeroDecimal=["JPY","HUF","TWD"].includes(code);
-  const digits=zeroDecimal?0:2;
+const money=(n:number,currency:string)=>new Intl.NumberFormat("en-US",{
+  style:"currency",currency,maximumFractionDigits:["JPY","HUF","TWD"].includes(currency)?0:2
+}).format(n);
 
-  // Legacy/incomplete rows must never crash the entire page.
-  if(!/^[A-Z]{3}$/.test(code)){
-    return `${code||"CUR"} ${amount.toLocaleString("en-US",{
-      minimumFractionDigits:digits,maximumFractionDigits:digits
-    })}`;
-  }
+function walletReadiness(wallet:Wallet){
+  const remaining=Math.max(0,wallet.totalAuthority-wallet.spentAmount);
+  const expiresMs=new Date(wallet.validUntil).getTime();
+  const msLeft=expiresMs-Date.now();
+  if(wallet.status!=="ACTIVE") return {ready:false,label:"REVOKED",message:"This wallet is revoked.",remaining,msLeft};
+  if(msLeft<=0) return {ready:false,label:"EXPIRED",message:"This wallet has expired. Create a fresh Intent Wallet before starting another purchase.",remaining,msLeft};
+  if(remaining<=0) return {ready:false,label:"SPENT",message:"This wallet has no remaining authority.",remaining,msLeft};
+  if(msLeft<15*60*1000) return {ready:false,label:"EXPIRING",message:"This wallet has less than 15 minutes remaining, so IntentLock will not start a new payment.",remaining,msLeft};
+  return {ready:true,label:"READY",message:"Wallet is active and can start a new payment.",remaining,msLeft};
+}
 
-  try{
-    return new Intl.NumberFormat("en-US",{
-      style:"currency",currency:code,
-      minimumFractionDigits:digits,maximumFractionDigits:digits
-    }).format(amount);
-  }catch{
-    return `${code} ${amount.toLocaleString("en-US",{
-      minimumFractionDigits:digits,maximumFractionDigits:digits
-    })}`;
-  }
-};
+function connectorMode(connector:Connector|null){
+  if(!connector) return "—";
+  return ["EBAY","SHOPIFY","HTTP_JSON"].includes(connector.kind)?"LIVE":"DEMO";
+}
+
+function statusHelp(status:string){
+  const map:Record<string,string>={
+    CREATED:"Session created. Search has not started yet.",
+    SEARCHING:"Marketplace discovery is running. Wallet policy has not been applied as a search filter.",
+    READY_TO_PAY:"A candidate passed deterministic wallet policy and is ready for checkout.",
+    AWAITING_STEP_UP:"The candidate is valid, but human authority is required for this exact quote.",
+    BLOCKED:"No returned candidate satisfied the current wallet policy. Inspect the candidate reasons below.",
+    PAYPAL_APPROVAL_PENDING:"PayPal checkout exists, but buyer approval has not completed yet.",
+    PAYMENT_PENDING:"Checkout exists on the selected payment rail and is waiting for provider completion.",
+    AUTHORIZED:"PayPal approved the order and placed an authorization hold. Capture has not completed yet.",
+    CAPTURE_PENDING:"Capture was requested. IntentLock is waiting for verified provider evidence before settling the wallet.",
+    CAPTURED:"Provider evidence, wallet ledger and session state agree. The purchase is complete.",
+    FAILED:"Execution failed before trusted capture. Inspect the trace for the exact stage.",
+    CANCELLED:"Checkout was cancelled before capture.",
+    REJECTED:"A required human step-up was rejected."
+  };
+  return map[status]??status.replaceAll("_"," ");
+}
+
+function friendlyViolation(code:string){
+  const map:Record<string,string>={
+    WALLET_REVOKED:"Wallet revoked",WALLET_EXPIRED:"Wallet expired",
+    CURRENCY_MISMATCH:"Currency normalization failed",
+    MAX_SINGLE_TRANSACTION_EXCEEDED:"Above hard per-transaction ceiling",
+    REMAINING_AUTHORITY_EXCEEDED:"Not enough remaining wallet authority",
+    CATEGORY_NOT_ALLOWED:"Category not allowed",BRAND_BLOCKED:"Brand explicitly blocked",
+    BRAND_NOT_ALLOWED:"Brand not allowed",REQUIRED_FEATURE_MISSING:"Required feature missing",
+    PAYEE_NOT_TRUSTED:"Payee is not in the trusted registry",PAYEELOCK_REGISTRY_REQUIRED:"PayeeLock enforce mode has no registry",
+    AUTHORIZATION_CONTEXT_UNAVAILABLE:"Could not bind payment/FX/payee context"
+  };
+  return map[code]??code.replaceAll("_"," ");
+}
 
 export default function AutonomousPurchasePage(){
   const [wallets,setWallets]=useState<Wallet[]>([]);
   const [connectors,setConnectors]=useState<Connector[]>([]);
   const [walletId,setWalletId]=useState("");
-  const [connectorId,setConnectorId]=useState("paypal-demo-marketplace");
+  const [connectorId,setConnectorId]=useState("");
   const [prompt,setPrompt]=useState("Find Sony or Bose wireless ANC headphones. Buy automatically if allowed.");
   const [session,setSession]=useState<Session|null>(null);
   const [events,setEvents]=useState<Event[]>([]);
@@ -89,6 +117,9 @@ export default function AutonomousPurchasePage(){
   const returnHandled=useRef(false);
 
   const wallet=useMemo(()=>wallets.find(w=>w.walletId===walletId)??null,[wallets,walletId]);
+  const connector=useMemo(()=>connectors.find(c=>c.id===connectorId)??null,[connectors,connectorId]);
+  const readiness=useMemo(()=>wallet?walletReadiness(wallet):null,[wallet,wallets]);
+  const blockReasons=useMemo(()=>[...new Set(candidates.flatMap(c=>c.decision==="BLOCK"?[...c.violations,...c.reasons]:[]))],[candidates]);
 
   async function load(){
     try{
@@ -98,9 +129,16 @@ export default function AutonomousPurchasePage(){
       ]);
       const enabled=c.connectors.filter(x=>x.enabled);
       setWallets(w.wallets);setConnectors(enabled);
-      if(!walletId&&w.wallets[0]) setWalletId(w.wallets[0].walletId);
+      if(!walletId){
+        const firstReady=w.wallets.find(x=>walletReadiness(x).ready);
+        if(firstReady) setWalletId(firstReady.walletId);
+      }
       if(!enabled.some(x=>x.id===connectorId)){
-        const preferred=enabled.find(x=>x.id==="paypal-demo-marketplace")??enabled[0];
+        const preferred=
+          enabled.find(x=>x.id==="ebay-browse")??
+          enabled.find(x=>x.kind==="SHOPIFY"||x.kind==="HTTP_JSON")??
+          enabled.find(x=>x.id==="paypal-demo-marketplace")??
+          enabled[0];
         if(preferred) setConnectorId(preferred.id);
       }
     }catch(e){setError(e instanceof Error?e.message:String(e));}
@@ -154,8 +192,23 @@ export default function AutonomousPurchasePage(){
     return ()=>clearInterval(timer);
   },[session?.sessionId,session?.status]);
 
+  useEffect(()=>{
+    if(typeof window==="undefined") return;
+    const qs=new URLSearchParams(window.location.search);
+    const id=qs.get("sessionId");
+    const paypal=qs.get("paypal");
+    if(id&&!paypal&&!session){
+      refreshSessionById(id).catch(e=>setError(e instanceof Error?e.message:String(e)));
+    }
+  },[]);
+
+
   async function start(){
     if(!walletId){setError("Select an Intent Wallet first.");return;}
+    if(!wallet){setError("Selected wallet could not be loaded.");return;}
+    const preflight=walletReadiness(wallet);
+    if(!preflight.ready){setError(preflight.message);return;}
+    if(!connectorId){setError("Select an available commerce connector.");return;}
     if(!prompt.trim()){setError("Enter a purchase goal.");return;}
     setBusy("Starting autonomous purchase session…");setError("");setSession(null);setEvents([]);setCandidates([]);setStepResult(null);setPayment(null);
     try{
@@ -181,8 +234,34 @@ export default function AutonomousPurchasePage(){
     try{
       const r=await postJson<{payment:Payment|null}>(`/api/sessions/${encodeURIComponent(session.sessionId)}/payment`,{});
       if(!r.payment?.checkoutUrl) throw new Error("Payment approval URL was not returned.");
-      setPayment(r.payment);await refreshSessionById(session.sessionId);
-      window.open(r.payment.checkoutUrl,"_blank","noopener,noreferrer");
+      setPayment(r.payment);
+      // Use same-tab navigation. Opening a new window after awaited network calls is
+      // frequently blocked by browsers, which left valid sessions stuck in
+      // PAYPAL_APPROVAL_PENDING even though checkout creation succeeded.
+      window.location.assign(r.payment.checkoutUrl);
+    }catch(e){setError(e instanceof Error?e.message:String(e));}
+    finally{setPaymentBusy(false);}
+  }
+  async function resumePayment(){
+    if(!session) return;
+    setPaymentBusy(true);setError("");
+    try{
+      if(session.status==="PAYPAL_APPROVAL_PENDING"){
+        let current=payment;
+        if(!current){
+          const p=await getJson<{payment:Payment|null}>(`/api/sessions/${encodeURIComponent(session.sessionId)}/payment`);
+          current=p.payment;setPayment(current);
+        }
+        if(!current?.checkoutUrl) throw new Error("PayPal approval URL is unavailable for this session.");
+        window.location.assign(current.checkoutUrl);
+        return;
+      }
+      if(session.status==="AUTHORIZED"){
+        await postJson(`/api/sessions/${encodeURIComponent(session.sessionId)}/payment/capture`,{});
+        await refreshSessionById(session.sessionId);
+        return;
+      }
+      await refreshSessionById(session.sessionId);
     }catch(e){setError(e instanceof Error?e.message:String(e));}
     finally{setPaymentBusy(false);}
   }
@@ -192,17 +271,17 @@ export default function AutonomousPurchasePage(){
 
   return <Shell><div className="page">
     <header className="pageHeader"><div>
-      <div className="eyebrow">INTENTLOCK V11.0.1 · GLOBAL AUTHORIZATION FIREWALL</div>
+      <div className="eyebrow">INTENTLOCK V11.3 · TRANSACTION RELIABILITY</div>
       <h1>Autonomous Purchase</h1>
-      <p>Merchant currency, buyer country and payment rail may change. IntentLock keeps the authority boundary deterministic and quote-bound.</p>
+      <p>Discovery finds candidates. Wallet policy evaluates them independently. Payment then moves through an explicit provider state machine until verified settlement.</p>
     </div>{session&&<span className="sessionIdBadge">{session.sessionId}</span>}</header>
 
     <section className="purchaseSessionGrid">
       <article className="card purchaseLaunch">
         <div className="cardHeader"><div><h2>1. Delegate the task</h2><p>Select any wallet currency. Cross-currency products are normalized through a bound FX quote before policy evaluation.</p></div></div>
         <div className="sessionFormGrid">
-          <label><span>Intent Wallet</span><select value={walletId} onChange={e=>setWalletId(e.target.value)}><option value="">Select wallet</option>{wallets.map(w=><option key={w.walletId} value={w.walletId}>{w.name} · {w.countryCode} · {w.currency}</option>)}</select></label>
-          <label><span>Commerce Connector</span><select value={connectorId} onChange={e=>setConnectorId(e.target.value)}>{connectors.map(c=><option key={c.id} value={c.id}>{c.name}</option>)}</select></label>
+          <label><span>Intent Wallet</span><select value={walletId} onChange={e=>setWalletId(e.target.value)}><option value="">Select wallet</option>{wallets.map(w=>{const r=walletReadiness(w);return <option key={w.walletId} value={w.walletId} disabled={!r.ready}>{w.name} · {w.countryCode} · {w.currency} · {r.label}</option>;})}</select></label>
+          <label><span>Commerce Connector</span><select value={connectorId} onChange={e=>setConnectorId(e.target.value)}>{connectors.map(c=><option key={c.id} value={c.id}>{c.name} · {connectorMode(c)}</option>)}</select></label>
         </div>
         {wallet&&<div className="authorityBar">
           <Authority label="Buyer context" value={`${wallet.countryCode} · ${wallet.currency}`}/>
@@ -210,24 +289,40 @@ export default function AutonomousPurchasePage(){
           <Authority label="Auto-buy" value={`≤ ${money(wallet.autoBuyLimit,wallet.currency)}`}/>
           <Authority label="Hard ceiling" value={money(wallet.maxSingleTransaction,wallet.currency)}/>
         </div>}
+        {wallet&&readiness&&<div className={`alert ${readiness.ready?"alertInfo":"alertError"}`}>
+          <strong>{readiness.label}</strong> · {readiness.message} {connector?`Connector: ${connector.name} (${connectorMode(connector)}).`:""}
+          {!readiness.ready&&<> <a href="/wallets"><strong>Open Intent Wallets →</strong></a></>}
+        </div>}
+        {!wallets.some(w=>walletReadiness(w).ready)&&wallets.length>0&&<div className="alert alertError">No existing wallet can start a new payment. Create a fresh wallet or extend authority before testing another transaction.</div>}
         <label className="purchasePrompt"><span>Purchase goal</span><textarea value={prompt} onChange={e=>setPrompt(e.target.value)} rows={5}/></label>
         <button className="button buttonPrimary buttonWide" onClick={start} disabled={!!busy}>Start Autonomous Purchase</button>
       </article>
 
       <article className="card"><div className="cardHeader"><div><h2>Session State</h2><p>Recommendation ≠ permission. Provider response ≠ trusted capture.</p></div></div>
         {!session&&<div className="sessionEmpty">No purchase session started yet.</div>}
-        {session&&<div className="sessionState">
-          <State label="Status" value={session.status}/><State label="Wallet" value={wallet?.name??session.walletId}/>
-          <State label="Connector" value={session.connectorId}/><State label="Decision" value={session.selectedDecision??"PENDING"}/>
-          <State label="Payment rail" value={session.paymentProvider?.toUpperCase()??"Selected at checkout"}/>
-          <State label="Order" value={session.providerOrderId??"Not created"}/><State label="Authorization" value={session.providerAuthorizationId??session.authorizationId??"Not created"}/>
-          <State label="Capture" value={session.providerCaptureId??"Not requested"}/><State label="Proof Receipt" value={session.proofReceiptId??"Not generated"}/>
-        </div>}
+        {session&&<>
+          <div className="sessionState">
+            <State label="Status" value={session.status}/><State label="Wallet" value={wallet?.name??session.walletId}/>
+            <State label="Connector" value={session.connectorId}/><State label="Decision" value={session.selectedDecision??"PENDING"}/>
+            <State label="Payment rail" value={session.paymentProvider?.toUpperCase()??"Selected at checkout"}/>
+            <State label="Order" value={session.providerOrderId??"Not created"}/><State label="Authorization" value={session.providerAuthorizationId??session.authorizationId??"Not created"}/>
+            <State label="Capture" value={session.providerCaptureId??"Not requested"}/><State label="Proof Receipt" value={session.proofReceiptId??"Not generated"}/>
+          </div>
+          <div className="sessionEmpty">{statusHelp(session.status)}</div>
+        </>}
       </article>
     </section>
 
     {busy&&<div className="alert alertInfo">{busy}</div>}
     {error&&<div className="alert alertError">{error}</div>}
+
+    {session?.status==="BLOCKED"&&<section className="sessionSection"><article className="decisionCard block">
+      <div className="decisionTop"><div><span className="miniLabel">WHY THIS SESSION STOPPED</span><h2>{candidates.length?"Policy rejected every returned candidate":"No marketplace candidates returned"}</h2></div></div>
+      <div className="decisionReasons">
+        {blockReasons.length?blockReasons.map(r=><span key={r}>{r.includes("_")?friendlyViolation(r):r}</span>):<span>Search returned no products. Try a simpler product query or another connector.</span>}
+      </div>
+      <p className="textMuted">These outcomes are computed from the selected wallet and returned product facts. They are not hard-coded transaction statuses.</p>
+    </article></section>}
 
     {events.length>0&&<section className="sessionSection"><div className="sectionTitleRow"><div><span className="miniLabel">VISIBLE AGENT ACTIVITY</span><h2>Session Trace</h2></div><span className="traceCount">{events.length} EVENTS</span></div>
       <div className="agentTimeline">{events.map((event,index)=><div key={event.eventId} className="timelineEvent"><div className="timelineRail"><span className="timelineDot">{index+1}</span></div><div className="timelineBody"><div className="timelineTop"><strong>{pretty(event.eventType)}</strong><span>{new Date(event.occurredAt).toLocaleTimeString()}</span></div><EventDetails event={event} authorityCurrency={authorityCurrency}/></div></div>)}</div>
@@ -240,7 +335,7 @@ export default function AutonomousPurchasePage(){
         <div className="policyBox"><p>IntentLock authority cost: <strong>{money(c.walletAmount,c.walletCurrency)}</strong>{fx?` · FX ${fx.source}`:" · same currency"}</p></div>
         {fx&&<div className="quoteBinding"><span>FX quote · expires {new Date(fx.expiresAt).toLocaleTimeString()}</span><code>{fx.quoteId} · 1 {fx.fromCurrency} = {fx.rate.toFixed(6)} {fx.toCurrency}</code></div>}
         {c.product.merchantMessage&&<div className="untrustedMerchant"><div><span>MERCHANT INPUT</span><strong>UNTRUSTED</strong></div><p>{c.product.merchantMessage}</p></div>}
-        <div className={`candidateDecision ${c.decision.toLowerCase()}`}><strong>{c.decision}</strong><span>{c.decision==="ALLOW"?"Inside normalized wallet authority":c.decision==="STEP_UP"?`Needs +${money(c.additionalAuthorityRequired,c.walletCurrency)}`:c.violations.join(" · ")}</span></div>
+        <div className={`candidateDecision ${c.decision.toLowerCase()}`}><strong>{c.decision}</strong><span>{c.decision==="ALLOW"?"Inside normalized wallet authority":c.decision==="STEP_UP"?`Needs +${money(c.additionalAuthorityRequired,c.walletCurrency)}`:[...c.violations.map(friendlyViolation),...c.reasons].join(" · ")}</span></div>
         {selected&&<div className="selectedFlag">SELECTED BY SESSION</div>}
       </article>;})}</div>
     </section>}
@@ -254,15 +349,15 @@ export default function AutonomousPurchasePage(){
 
       {session.status==="READY_TO_PAY"&&<article className="readyToPay"><div><span className="miniLabel">INTENTLOCK AUTHORITY PASSED</span><h2>READY TO PAY</h2><p>IntentLock will now select a configured rail that can handle the merchant presentment currency/country. Checkout creation still does not mean capture.</p></div><button className="button buttonPrimary" onClick={createPayment} disabled={paymentBusy}>{paymentBusy?"Selecting payment rail…":`Create Authorized Checkout · ${money(session.selectedProduct.price,session.selectedProduct.currency)}`}</button></article>}
 
-      {session.status==="PAYPAL_APPROVAL_PENDING"&&<article className="paymentPendingCard"><div><span className="miniLabel">PAYPAL ORDER CREATED</span><h2>BUYER APPROVAL REQUIRED</h2><p>No capture has happened. Approve in PayPal; the return tab will authorize, revalidate merchant + FX + policy, then request capture.</p></div><div className="paymentPendingActions">{payment?.checkoutUrl&&<a className="button buttonPrimary" href={payment.checkoutUrl} target="_blank" rel="noreferrer">Open PayPal</a>}<button className="button buttonSecondary" onClick={refreshSession}>Refresh Status</button></div></article>}
+      {session.status==="PAYPAL_APPROVAL_PENDING"&&<article className="paymentPendingCard"><div><span className="miniLabel">PAYPAL ORDER CREATED · NOT PAID</span><h2>BUYER APPROVAL REQUIRED</h2><p>The transaction is pending because PayPal approval has not returned yet. Resume checkout in the same tab; after approval IntentLock will authorize, revalidate and request capture.</p></div><div className="paymentPendingActions"><button className="button buttonPrimary" onClick={resumePayment} disabled={paymentBusy}>Resume PayPal Approval</button><button className="button buttonSecondary" onClick={refreshSession}>Refresh Status</button></div></article>}
 
-      {session.status==="AUTHORIZED"&&<article className="paymentPendingCard"><div><span className="miniLabel">PAYPAL FUNDS HELD</span><h2>AUTHORIZED — NOT CAPTURED</h2><p>IntentLock revalidates product facts, FX validity and wallet authority again before capture.</p></div></article>}
+      {session.status==="AUTHORIZED"&&<article className="paymentPendingCard"><div><span className="miniLabel">PAYPAL FUNDS HELD</span><h2>AUTHORIZED — NOT CAPTURED</h2><p>Buyer approval succeeded. If a browser/network interruption stopped the next step, the idempotent capture request can be safely resumed.</p></div><button className="button buttonPrimary" onClick={resumePayment} disabled={paymentBusy}>Resume Safe Capture</button></article>}
 
-      {session.status==="CAPTURE_PENDING"&&<article className="paymentPendingCard"><div><span className="miniLabel">CAPTURE REQUEST SENT</span><h2>WAITING FOR VERIFIED PAYPAL WEBHOOK</h2><p>Even a successful capture API response cannot set CAPTURED. Only the verified provider webhook can debit the wallet.</p></div><button className="button buttonSecondary" onClick={refreshSession}>Refresh Status</button></article>}
+      {session.status==="CAPTURE_PENDING"&&<article className="paymentPendingCard"><div><span className="miniLabel">CAPTURE REQUEST SENT</span><h2>WAITING FOR VERIFIED PAYPAL EVIDENCE</h2><p>This pending state is intentional: IntentLock will not trust the browser or capture API response alone. The verified webhook settles the wallet exactly once.</p></div><div className="paymentPendingActions"><button className="button buttonSecondary" onClick={refreshSession}>Refresh Status</button><a className="button buttonSecondary" href={`/trust-center?sessionId=${encodeURIComponent(session.sessionId)}`}>Inspect Transaction</a></div></article>}
 
       {session.status==="PAYMENT_PENDING"&&<article className="paymentPendingCard"><div><span className="miniLabel">PAYMENT EXECUTION</span><h2>WAITING FOR VERIFIED WEBHOOK</h2><p>The selected alternate rail remains webhook-gated.</p></div>{payment?.checkoutUrl&&<a className="button buttonPrimary" href={payment.checkoutUrl} target="_blank" rel="noreferrer">Open Checkout</a>}</article>}
 
-      {session.status==="CAPTURED"&&<article className="capturedProofCard"><div><span className="miniLabel">VERIFIED PURCHASE</span><h2>PAYMENT CAPTURED</h2><p>Verified webhook · wallet authority debited once in its own currency · proof receipt generated.</p></div><div className="capturedActions"><strong>{money(Number(session.capturedAmount??session.selectedProduct.price),session.capturedCurrency??session.selectedProduct.currency)}</strong><a className="button buttonPrimary" href={`/proof/${encodeURIComponent(session.sessionId)}`}>View Proof Receipt</a></div></article>}
+      {session.status==="CAPTURED"&&<article className="capturedProofCard"><div><span className="miniLabel">VERIFIED PURCHASE</span><h2>PAYMENT CAPTURED</h2><p>Verified webhook · wallet authority debited once in its own currency · proof receipt generated.</p></div><div className="capturedActions"><strong>{money(Number(session.capturedAmount??session.selectedProduct.price),session.capturedCurrency??session.selectedProduct.currency)}</strong><a className="button buttonPrimary" href={`/proof/${encodeURIComponent(session.sessionId)}`}>View Proof Receipt</a><a className="button buttonSecondary" href={`/trust-center?sessionId=${encodeURIComponent(session.sessionId)}`}>Open Transaction Control</a></div></article>}
     </section>}
   </div></Shell>;
 }
@@ -271,6 +366,9 @@ function Authority({label,value}:{label:string;value:string}){return <div><span>
 function State({label,value}:{label:string;value:string}){return <div className="sessionStateRow"><span>{label}</span><strong>{value}</strong></div>;}
 function EventDetails({event,authorityCurrency}:{event:Event;authorityCurrency:string}){
   const p=event.payload;
+  if(event.eventType==="DISCOVERY_QUERY_PLANNED") return <p>Marketplace search query: <strong>{String(p.searchQuery)}</strong>. Wallet rules are evaluated only after discovery.</p>;
+  if(event.eventType==="COMMERCE_NO_RESULTS") return <p>No marketplace products matched <strong>{String(p.searchQuery)}</strong>. This is a discovery outcome, not a policy rejection.</p>;
+  if(event.eventType==="PAYEE_IDENTITY_BOUND") return <p>PayeeLock bound <strong>{String(p.provider)}</strong> payee <strong>{String(p.payeeId)}</strong> before payment authorization.</p>;
   if(event.eventType==="PRODUCT_FOUND") return <p>{String(p.merchant)} found {String(p.title)} at {money(Number(p.price),String(p.currency??authorityCurrency))} · merchant {String(p.merchantCountry??"--")}</p>;
   if(event.eventType==="FX_QUOTE_BOUND") return <p>FX bound: {money(Number(p.presentmentAmount),String(p.presentmentCurrency))} → {money(Number(p.walletAmount),String(p.walletCurrency))} · {String(p.fxSource)} · {String(p.fxQuoteId)}</p>;
   if(event.eventType==="POLICY_DECISION") return <p>{String(p.title)} → <strong>{String(p.decision)}</strong> in {String(p.walletCurrency??authorityCurrency)} authority.</p>;

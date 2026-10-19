@@ -1,0 +1,19 @@
+IntentLock V11.1 — eBay Commerce Integration
+
+REPLACE
+apps/worker/.dev.vars.example
+apps/worker/src/commerce/types.ts
+apps/worker/src/commerce/registry.ts
+apps/web/app/commerce/page.tsx
+
+ADD
+apps/worker/src/commerce/ebay-connector.ts
+apps/worker/src/tests/ebay-commerce.test.ts
+apps/worker/scripts/ebay-smoke.mjs
+CHANGELOG-V11.1.md
+UPGRADE-V11.1-EBAY.md
+PATCH_MANIFEST-V11.1.txt
+
+NO DATABASE MIGRATION REQUIRED.
+
+The ZIP is intended to be extracted directly into D:\IntentLock with file replacement enabled.

@@ -3,21 +3,31 @@
 import Link from "next/link";
 import {usePathname} from "next/navigation";
 import type {ReactNode} from "react";
+import styles from "./Shell.module.css";
 
 const primary = [
   {href:"/", label:"Overview", index:"01"},
-  {href:"/demo", label:"WhatsApp Demo", index:"02"},
-  {href:"/new-purchase", label:"New Purchase", index:"03"},
-  {href:"/wallets", label:"Intent Wallets", index:"04"},
-  {href:"/trust", label:"Trust & Risk", index:"05"},
+  {href:"/new-purchase", label:"Run Purchase", index:"02"},
+  {href:"/wallets", label:"Intent Wallets", index:"03"},
+  {href:"/commerce", label:"Commerce Search", index:"04"},
+  {href:"/trust-center", label:"Transaction Control", index:"05"},
+  {href:"/post-purchase", label:"Post-Purchase", index:"06"},
 ];
 
 const secondary = [
+  {href:"/demo", label:"WhatsApp Demo"},
+  {href:"/trust", label:"Trust & Risk"},
   {href:"/security-lab", label:"Security Lab"},
   {href:"/evals", label:"Evaluation Suite"},
   {href:"/audit", label:"Audit Log"},
   {href:"/how-it-works", label:"How it works"},
 ];
+
+const titleFor=(pathname:string)=>{
+  const all=[...primary,...secondary];
+  const match=all.find(item=>item.href==="/"?pathname==="/":pathname===item.href||pathname.startsWith(`${item.href}/`));
+  return match?.label??"IntentLock";
+};
 
 export function Shell({children}:{children:ReactNode}) {
   const pathname = usePathname();
@@ -28,67 +38,78 @@ export function Shell({children}:{children:ReactNode}) {
       : pathname === href || pathname.startsWith(`${href}/`);
 
   return (
-    <div className="appShell v1011Shell">
-      <aside className="sidebar v1011Sidebar">
-        <div className="v1011Brand">
-          <Link href="/" className="v1011BrandLock" aria-label="IntentLock home">
-            <span className="v1011BrandMark">IL</span>
-            <span>
-              <strong>IntentLock</strong>
-              <small>Transaction firewall for AI agents</small>
-            </span>
-          </Link>
+    <div className={styles.shell}>
+      <aside className={styles.sidebar}>
+        <Link href="/" className={styles.brand} aria-label="IntentLock home">
+          <span className={styles.brandMark}>
+            <span/>
+            <span/>
+          </span>
+          <span className={styles.brandCopy}>
+            <strong>IntentLock</strong>
+            <small>Financial control plane</small>
+          </span>
+        </Link>
+
+        <div className={styles.versionPill}>
+          <span className={styles.liveDot}/>
+          <span>V11.4 · Post-purchase guard</span>
         </div>
 
-        <nav className="v1011Nav" aria-label="Primary navigation">
-          <span className="v1011NavLabel">Product</span>
+        <nav className={styles.nav} aria-label="Primary navigation">
+          <span className={styles.navLabel}>Product</span>
           {primary.map(item => (
             <Link
               key={item.href}
               href={item.href}
-              className={
-                active(item.href)
-                  ? "v1011NavItem v1011NavItemActive"
-                  : "v1011NavItem"
-              }
+              className={active(item.href)?`${styles.navItem} ${styles.navItemActive}`:styles.navItem}
             >
-              <span className="v1011NavIndex">{item.index}</span>
+              <span className={styles.navIndex}>{item.index}</span>
               <span>{item.label}</span>
+              <span className={styles.navArrow}>↗</span>
             </Link>
           ))}
 
-          <span className="v1011NavLabel v1011NavLabelSecondary">
-            Inspect
-          </span>
-
+          <span className={`${styles.navLabel} ${styles.secondaryLabel}`}>Inspect</span>
           {secondary.map(item => (
             <Link
               key={item.href}
               href={item.href}
-              className={
-                active(item.href)
-                  ? "v1011NavItem v1011NavItemActive"
-                  : "v1011NavItem"
-              }
+              className={active(item.href)?`${styles.navItem} ${styles.navItemActive}`:styles.navItem}
             >
-              <span className="v1011NavIndex">—</span>
+              <span className={styles.navIndex}>—</span>
               <span>{item.label}</span>
+              <span className={styles.navArrow}>↗</span>
             </Link>
           ))}
         </nav>
 
-        <div className="v1011SidebarFooter">
-          <div className="v1011LiveLine">
-            <span className="v1011LiveDot" />
-            WhatsApp demo live
+        <div className={styles.sidebarFooter}>
+          <div className={styles.footerCard}>
+            <span className={styles.footerKicker}>FINANCIAL STATE</span>
+            <strong>Settlement verified</strong>
+            <p>Webhook → queue → ledger → proof</p>
+            <div className={styles.footerTrack}><span/></div>
           </div>
-          <p>Planned availability through 05 Oct 2026.</p>
+          <span className={styles.footerMeta}>Recommendation ≠ permission</span>
         </div>
       </aside>
 
-      <main className="content v1011Content">
-        {children}
-      </main>
+      <div className={styles.workspace}>
+        <header className={styles.topbar}>
+          <div>
+            <span className={styles.topbarEyebrow}>INTENTLOCK</span>
+            <strong>{titleFor(pathname)}</strong>
+          </div>
+          <div className={styles.topbarStatus}>
+            <span className={styles.liveDot}/>
+            <span>Control plane online</span>
+            <span className={styles.topbarDivider}/>
+            <span className={styles.topbarVersion}>V11.4</span>
+          </div>
+        </header>
+        <main className={styles.content}>{children}</main>
+      </div>
     </div>
   );
 }

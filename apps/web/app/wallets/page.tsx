@@ -30,30 +30,9 @@ type Resolution={
 
 const csv=(s:string)=>s.split(",").map(x=>x.trim()).filter(Boolean);
 const CURRENCIES=["INR","USD","EUR","GBP","SGD","AUD","CAD","JPY","CHF","HKD","NZD","SEK","NOK","DKK","PLN","CZK","MXN","BRL","ILS","HUF","MYR","TWD","THB","PHP","CNY"];
-const money=(n:number,currency?:string|null)=>{
-  const code=String(currency??"").trim().toUpperCase();
-  const amount=Number.isFinite(Number(n))?Number(n):0;
-  const zeroDecimal=["JPY","HUF","TWD"].includes(code);
-  const digits=zeroDecimal?0:2;
-
-  // Legacy/incomplete rows must never crash the entire page.
-  if(!/^[A-Z]{3}$/.test(code)){
-    return `${code||"CUR"} ${amount.toLocaleString("en-US",{
-      minimumFractionDigits:digits,maximumFractionDigits:digits
-    })}`;
-  }
-
-  try{
-    return new Intl.NumberFormat("en-US",{
-      style:"currency",currency:code,
-      minimumFractionDigits:digits,maximumFractionDigits:digits
-    }).format(amount);
-  }catch{
-    return `${code} ${amount.toLocaleString("en-US",{
-      minimumFractionDigits:digits,maximumFractionDigits:digits
-    })}`;
-  }
-};
+const money=(n:number,currency:string)=>new Intl.NumberFormat("en-US",{
+  style:"currency",currency,maximumFractionDigits:["JPY","HUF","TWD"].includes(currency)?0:2
+}).format(n);
 
 export default function WalletsPage(){
   const [wallets,setWallets]=useState<Wallet[]>([]);
@@ -68,7 +47,7 @@ export default function WalletsPage(){
     name:"Global Electronics",countryCode:"IN",currency:"INR",totalAuthority:"10000",
     autoBuyLimit:"6000",maxSingleTransaction:"7500",allowedCategories:"electronics",
     allowedBrands:"Sony, Bose",blockedBrands:"Boat",requiredFeatures:"wireless, ANC",
-    validityHours:"24"
+    validityHours:"72"
   });
 
   const [tx,setTx]=useState({
@@ -134,9 +113,9 @@ export default function WalletsPage(){
 
   return <Shell><div className="page">
     <header className="pageHeader"><div>
-      <div className="eyebrow">GLOBAL DELEGATED SPENDING AUTHORITY</div>
+      <div className="eyebrow">INTENTLOCK V11.3 · DELEGATED SPENDING AUTHORITY</div>
       <h1>Intent Wallets</h1>
-      <p>Authority has its own country and currency. Merchant checkout may use another currency; IntentLock binds the FX quote before policy evaluation.</p>
+      <p>Wallet rules are live policy, not demo outcomes. Expiry, remaining authority, brand/category restrictions and limits are evaluated from the selected wallet on every transaction.</p>
     </div></header>
 
     <section className="walletHero"><div>
@@ -168,9 +147,9 @@ export default function WalletsPage(){
         <div className="cardHeader"><div><h2>Active Wallets</h2><p>Delegated authority currently stored in Neon.</p></div><span className="pill">{wallets.length} TOTAL</span></div>
         <div className="walletList">
           {!wallets.length&&<div className="walletEmpty">No Intent Wallet yet.</div>}
-          {wallets.map(w=><button key={w.walletId} className={w.walletId===selectedId?"walletListItem active":"walletListItem"} onClick={()=>{setSelectedId(w.walletId);setEvaluation(null);setStepUp(null);setResolution(null);}}>
-            <div><strong>{w.name}</strong><span>{money(w.totalAuthority-w.spentAmount,w.currency)} remaining</span></div><span className="walletStatus">{w.countryCode} · {w.currency} · {w.status}</span>
-          </button>)}
+          {wallets.map(w=>{const expired=new Date(w.validUntil).getTime()<=Date.now();return <button key={w.walletId} className={w.walletId===selectedId?"walletListItem active":"walletListItem"} onClick={()=>{setSelectedId(w.walletId);setEvaluation(null);setStepUp(null);setResolution(null);}}>
+            <div><strong>{w.name}</strong><span>{money(w.totalAuthority-w.spentAmount,w.currency)} remaining · expires {new Date(w.validUntil).toLocaleString()}</span></div><span className="walletStatus">{w.countryCode} · {w.currency} · {w.status!=="ACTIVE"?"REVOKED":expired?"EXPIRED":"READY"}</span>
+          </button>;})}
         </div>
       </article>
     </div>
@@ -182,8 +161,11 @@ export default function WalletsPage(){
           <Metric label="Auto-Buy" value={`≤ ${money(selected.autoBuyLimit,selected.currency)}`} success/>
           <Metric label="Step-Up Zone" value={`${money(selected.autoBuyLimit,selected.currency)}–${money(selected.maxSingleTransaction,selected.currency)}`}/>
           <Metric label="Hard Ceiling" value={money(selected.maxSingleTransaction,selected.currency)}/>
+          <Metric label="Valid Until" value={new Date(selected.validUntil).toLocaleString()}/>
         </div>
       </article>
+
+      {(selected.status!=="ACTIVE"||new Date(selected.validUntil).getTime()<=Date.now())&&<div className="alert alertError" style={{gridColumn:"1 / -1"}}>This wallet cannot start a new purchase because it is {selected.status!=="ACTIVE"?"revoked":"expired"}. Create a fresh wallet instead of testing against stale authority.</div>}
 
       <article className="card"><div className="cardHeader"><div><h2>Authority Simulator</h2><p>This simulator uses the wallet currency. Cross-currency normalization happens in Marketplace / Autonomous Purchase.</p></div></div>
         <div className="formGrid compact">

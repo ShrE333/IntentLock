@@ -1,6 +1,7 @@
 import type {CommerceConnector,CommerceConnectorInfo} from "./types";
 import {DemoMarketplaceConnector} from "./demo-connector";
 import {PayPalDemoMarketplaceConnector} from "./paypal-demo-connector";
+import {EbayBrowseConnector} from "./ebay-connector";
 import {HttpJsonCommerceConnector} from "./http-json-connector";
 import {ShopifyStorefrontConnector} from "./shopify-connector";
 
@@ -10,6 +11,13 @@ export type CommerceEnv={
   SHOPIFY_STOREFRONT_PUBLIC_TOKEN?:string;
   SHOPIFY_STOREFRONT_PRIVATE_TOKEN?:string;
   SHOPIFY_STOREFRONT_API_VERSION?:string;
+
+  EBAY_CLIENT_ID?:string;
+  EBAY_CLIENT_SECRET?:string;
+  EBAY_ENV?:string;
+  EBAY_MARKETPLACE_ID?:string;
+  EBAY_ENDUSER_COUNTRY?:string;
+  EBAY_ENDUSER_POSTAL_CODE?:string;
 };
 
 export function getCommerceConnectors(env:CommerceEnv):CommerceConnector[]{
@@ -17,6 +25,17 @@ export function getCommerceConnectors(env:CommerceEnv):CommerceConnector[]{
     new PayPalDemoMarketplaceConnector(),
     new DemoMarketplaceConnector()
   ];
+
+  if(env.EBAY_CLIENT_ID&&env.EBAY_CLIENT_SECRET){
+    connectors.push(new EbayBrowseConnector({
+      clientId:env.EBAY_CLIENT_ID,
+      clientSecret:env.EBAY_CLIENT_SECRET,
+      environment:env.EBAY_ENV||"sandbox",
+      marketplaceId:env.EBAY_MARKETPLACE_ID||"EBAY_US",
+      endUserCountry:env.EBAY_ENDUSER_COUNTRY,
+      endUserPostalCode:env.EBAY_ENDUSER_POSTAL_CODE
+    }));
+  }
 
   if(env.SHOPIFY_STORE_DOMAIN&&(env.SHOPIFY_STOREFRONT_PRIVATE_TOKEN||env.SHOPIFY_STOREFRONT_PUBLIC_TOKEN)){
     connectors.push(new ShopifyStorefrontConnector({
@@ -35,10 +54,15 @@ export function getCommerceConnectors(env:CommerceEnv):CommerceConnector[]{
 
 export function connectorStatus(env:CommerceEnv):CommerceConnectorInfo[]{
   const active=getCommerceConnectors(env).map(c=>c.info());
+  const ebayConfigured=active.some(x=>x.id==="ebay-browse");
   const shopifyConfigured=active.some(x=>x.id==="shopify-storefront");
 
   return [
     ...active,
+    ...(!ebayConfigured?[{
+      id:"ebay-browse",name:"eBay Browse",kind:"EBAY" as const,
+      enabled:false,description:"Live eBay Browse adapter. Configure EBAY_CLIENT_ID and EBAY_CLIENT_SECRET to enable it."
+    }]:[]),
     ...(!shopifyConfigured?[{
       id:"shopify-storefront",name:"Shopify Storefront",kind:"SHOPIFY" as const,
       enabled:false,description:"Optional live Storefront adapter. IntentLock no longer depends on it."

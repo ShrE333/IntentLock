@@ -101,6 +101,29 @@ async function paypalRequest(
   return body;
 }
 
+export async function getPayPalCaptureDetails(
+  env:PayPalEnv,
+  captureId:string,
+  fetcher:FetchLike=globalThis.fetch.bind(globalThis)
+){
+  if(!captureId) throw new Error("PAYPAL_CAPTURE_ID_REQUIRED");
+  const body=await paypalRequest(
+    env,
+    `/v2/payments/captures/${encodeURIComponent(captureId)}`,
+    {method:"GET"},
+    undefined,
+    fetcher
+  );
+  return {
+    captureId:String(body?.id??captureId),
+    status:String(body?.status??"UNKNOWN"),
+    amount:Number(body?.amount?.value??0),
+    currency:String(body?.amount?.currency_code??"").toUpperCase(),
+    createTime:body?.create_time?String(body.create_time):null,
+    updateTime:body?.update_time?String(body.update_time):null
+  };
+}
+
 export async function createPayPalOrder(
   env:PayPalEnv,
   input:CreateCheckoutInput,
@@ -128,16 +151,9 @@ export async function createPayPalOrder(
           custom_id:input.sessionId,
           invoice_id:`intentlock-${input.sessionId}`.slice(0,127),
           description:`IntentLock: ${input.productTitle}`.slice(0,127),
-          amount:{
-            currency_code:currency,
-            value:formatPayPalMoney(input.amount,currency)
-          }
+          amount:{currency_code:currency,value:formatPayPalMoney(input.amount,currency)}
         }],
-        application_context:{
-          return_url:returnUrl,
-          cancel_url:cancelUrl,
-          user_action:"CONTINUE"
-        }
+        application_context:{return_url:returnUrl,cancel_url:cancelUrl,user_action:"CONTINUE"}
       })
     },
     `create-${input.idempotencyKey}`,
@@ -147,135 +163,178 @@ export async function createPayPalOrder(
   const approve=Array.isArray(body?.links)
     ? body.links.find((x:any)=>x?.rel==="approve" || x?.rel==="payer-action")
     : null;
-
-  if(!body?.id || !approve?.href)
-    throw new Error("PAYPAL_APPROVAL_URL_MISSING");
-
+  if(!body?.id || !approve?.href) throw new Error("PAYPAL_APPROVAL_URL_MISSING");
   return {
-    provider:"paypal",
-    providerOrderId:String(body.id),
-    checkoutUrl:String(approve.href),
-    status:String(body.status??"CREATED"),
-    expiresAt:input.expiresAt,
-    referenceId:input.sessionId
+    provider:"paypal",providerOrderId:String(body.id),checkoutUrl:String(approve.href),
+    status:String(body.status??"CREATED"),expiresAt:input.expiresAt,referenceId:input.sessionId
   };
 }
 
 export async function authorizePayPalOrder(
-  env:PayPalEnv,
-  orderId:string,
-  idempotencyKey:string,
+  env:PayPalEnv,orderId:string,idempotencyKey:string,
   fetcher:FetchLike=globalThis.fetch.bind(globalThis)
 ):Promise<PaymentAuthorization>{
   const body=await paypalRequest(
-    env,
-    `/v2/checkout/orders/${encodeURIComponent(orderId)}/authorize`,
-    {method:"POST",body:"{}"},
-    `authorize-${idempotencyKey}`,
-    fetcher
+    env,`/v2/checkout/orders/${encodeURIComponent(orderId)}/authorize`,
+    {method:"POST",body:"{}"},`authorize-${idempotencyKey}`,fetcher
   );
-
   const auth=body?.purchase_units?.[0]?.payments?.authorizations?.[0];
   if(!auth?.id) throw new Error("PAYPAL_AUTHORIZATION_ID_MISSING");
-
   return {
-    provider:"paypal",
-    providerOrderId:orderId,
-    providerAuthorizationId:String(auth.id),
-    status:String(auth.status??body.status??"AUTHORIZED"),
-    amount:Number(auth?.amount?.value??0),
+    provider:"paypal",providerOrderId:orderId,providerAuthorizationId:String(auth.id),
+    status:String(auth.status??body.status??"AUTHORIZED"),amount:Number(auth?.amount?.value??0),
     currency:String(auth?.amount?.currency_code??"").toUpperCase()
   };
 }
 
 export async function capturePayPalAuthorization(
-  env:PayPalEnv,
-  authorizationId:string,
-  orderId:string,
-  idempotencyKey:string,
+  env:PayPalEnv,authorizationId:string,orderId:string,idempotencyKey:string,
   fetcher:FetchLike=globalThis.fetch.bind(globalThis)
 ):Promise<PaymentCaptureRequest>{
   const body=await paypalRequest(
-    env,
-    `/v2/payments/authorizations/${encodeURIComponent(authorizationId)}/capture`,
-    {method:"POST",body:"{}"},
-    `capture-${idempotencyKey}`,
-    fetcher
+    env,`/v2/payments/authorizations/${encodeURIComponent(authorizationId)}/capture`,
+    {method:"POST",body:"{}"},`capture-${idempotencyKey}`,fetcher
   );
-
   return {
-    provider:"paypal",
-    providerOrderId:orderId,
-    providerAuthorizationId:authorizationId,
-    providerCaptureId:body?.id?String(body.id):null,
-    status:String(body?.status??"PENDING"),
-    amount:Number(body?.amount?.value??0),
-    currency:String(body?.amount?.currency_code??"").toUpperCase()
+    provider:"paypal",providerOrderId:orderId,providerAuthorizationId:authorizationId,
+    providerCaptureId:body?.id?String(body.id):null,status:String(body?.status??"PENDING"),
+    amount:Number(body?.amount?.value??0),currency:String(body?.amount?.currency_code??"").toUpperCase()
   };
 }
 
-export type VerifiedPayPalWebhook = {
-  valid:boolean;
-  verificationStatus:string;
-  event:any;
-};
+export type VerifiedPayPalWebhook = {valid:boolean;verificationStatus:string;event:any;};
 
 export async function verifyPayPalWebhook(
-  env:PayPalEnv,
-  request:Request,
-  rawBody:string,
+  env:PayPalEnv,request:Request,rawBody:string,
   fetcher:FetchLike=globalThis.fetch.bind(globalThis)
 ):Promise<VerifiedPayPalWebhook>{
   if(!env.PAYPAL_WEBHOOK_ID) throw new Error("PAYPAL_WEBHOOK_ID_NOT_CONFIGURED");
-
   const event=JSON.parse(rawBody);
   const transmissionId=request.headers.get("paypal-transmission-id");
   const transmissionTime=request.headers.get("paypal-transmission-time");
   const certUrl=request.headers.get("paypal-cert-url");
   const authAlgo=request.headers.get("paypal-auth-algo");
   const transmissionSig=request.headers.get("paypal-transmission-sig");
-
-  if(!transmissionId||!transmissionTime||!certUrl||!authAlgo||!transmissionSig){
+  if(!transmissionId||!transmissionTime||!certUrl||!authAlgo||!transmissionSig)
     return {valid:false,verificationStatus:"MISSING_HEADERS",event};
-  }
 
   const body=await paypalRequest(
-    env,
-    "/v1/notifications/verify-webhook-signature",
-    {
-      method:"POST",
-      body:JSON.stringify({
-        transmission_id:transmissionId,
-        transmission_time:transmissionTime,
-        cert_url:certUrl,
-        auth_algo:authAlgo,
-        transmission_sig:transmissionSig,
-        webhook_id:env.PAYPAL_WEBHOOK_ID,
-        webhook_event:event
-      })
-    },
-    undefined,
-    fetcher
+    env,"/v1/notifications/verify-webhook-signature",
+    {method:"POST",body:JSON.stringify({
+      transmission_id:transmissionId,transmission_time:transmissionTime,
+      cert_url:certUrl,auth_algo:authAlgo,transmission_sig:transmissionSig,
+      webhook_id:env.PAYPAL_WEBHOOK_ID,webhook_event:event
+    })},undefined,fetcher
   );
-
   const verificationStatus=String(body?.verification_status??"");
-  return {
-    valid:verificationStatus==="SUCCESS",
-    verificationStatus,
-    event
-  };
+  return {valid:verificationStatus==="SUCCESS",verificationStatus,event};
 }
 
 export function extractPayPalWebhookIds(event:any){
   const resource=event?.resource??{};
   const related=resource?.supplementary_data?.related_ids??{};
   return {
-    eventType:String(event?.event_type??"unknown"),
-    eventId:event?.id?String(event.id):null,
+    eventType:String(event?.event_type??"unknown"),eventId:event?.id?String(event.id):null,
     orderId:related?.order_id?String(related.order_id):null,
     authorizationId:related?.authorization_id?String(related.authorization_id):null,
     captureId:resource?.id?String(resource.id):null,
-    amount:Number(resource?.amount?.value??0),
-    currency:String(resource?.amount?.currency_code??"").toUpperCase()
+    amount:Number(resource?.amount?.value??0),currency:String(resource?.amount?.currency_code??"").toUpperCase()
   };
+}
+
+export async function createPayPalRefund(
+  env:PayPalEnv,
+  captureId:string,
+  amount:number,
+  currency:string,
+  requestId:string,
+  fetcher:FetchLike=globalThis.fetch.bind(globalThis)
+){
+  if(!captureId) throw new Error("PAYPAL_CAPTURE_ID_REQUIRED");
+  const body=await paypalRequest(
+    env,
+    `/v2/payments/captures/${encodeURIComponent(captureId)}/refund`,
+    {
+      method:"POST",
+      body:JSON.stringify({
+        amount:{currency_code:currency.toUpperCase(),value:formatPayPalMoney(amount,currency)}
+      })
+    },
+    requestId,
+    fetcher
+  );
+  if(!body?.id) throw new Error("PAYPAL_REFUND_ID_MISSING");
+  return {
+    refundId:String(body.id),status:String(body.status??"PENDING"),
+    amount:Number(body?.amount?.value??amount),currency:String(body?.amount?.currency_code??currency).toUpperCase(),
+    createTime:body?.create_time?String(body.create_time):null,
+    updateTime:body?.update_time?String(body.update_time):null
+  };
+}
+
+export async function getPayPalRefundDetails(
+  env:PayPalEnv,
+  refundId:string,
+  fetcher:FetchLike=globalThis.fetch.bind(globalThis)
+){
+  if(!refundId) throw new Error("PAYPAL_REFUND_ID_REQUIRED");
+  const body=await paypalRequest(
+    env,`/v2/payments/refunds/${encodeURIComponent(refundId)}`,
+    {method:"GET"},undefined,fetcher
+  );
+  return {
+    refundId:String(body?.id??refundId),status:String(body?.status??"UNKNOWN"),
+    amount:Number(body?.amount?.value??0),currency:String(body?.amount?.currency_code??"").toUpperCase(),
+    createTime:body?.create_time?String(body.create_time):null,
+    updateTime:body?.update_time?String(body.update_time):null
+  };
+}
+
+export async function listPayPalDisputes(
+  env:PayPalEnv,
+  disputedTransactionId?:string,
+  fetcher:FetchLike=globalThis.fetch.bind(globalThis)
+){
+  const params=new URLSearchParams();
+  params.set("page_size","20");
+  if(disputedTransactionId) params.set("disputed_transaction_id",disputedTransactionId);
+  const body=await paypalRequest(
+    env,`/v1/customer/disputes?${params.toString()}`,
+    {method:"GET"},undefined,fetcher
+  );
+  return Array.isArray(body?.items)?body.items:[];
+}
+
+export async function getPayPalDisputeDetails(
+  env:PayPalEnv,
+  disputeId:string,
+  fetcher:FetchLike=globalThis.fetch.bind(globalThis)
+){
+  if(!disputeId) throw new Error("PAYPAL_DISPUTE_ID_REQUIRED");
+  return paypalRequest(
+    env,`/v1/customer/disputes/${encodeURIComponent(disputeId)}`,
+    {method:"GET"},undefined,fetcher
+  );
+}
+
+export async function sendPayPalDisputeMessage(
+  env:PayPalEnv,
+  disputeId:string,
+  message:string,
+  fetcher:FetchLike=globalThis.fetch.bind(globalThis)
+){
+  if(!disputeId) throw new Error("PAYPAL_DISPUTE_ID_REQUIRED");
+  if(!message.trim()) throw new Error("PAYPAL_DISPUTE_MESSAGE_REQUIRED");
+  return paypalRequest(
+    env,`/v1/customer/disputes/${encodeURIComponent(disputeId)}/send-message`,
+    {method:"POST",body:JSON.stringify({message:message.slice(0,2000)})},
+    `dispute-message-${disputeId}-${await shaRequestId(message)}`,
+    fetcher
+  );
+}
+
+async function shaRequestId(value:string){
+  const bytes=new TextEncoder().encode(value);
+  const digest=await crypto.subtle.digest("SHA-256",bytes);
+  return [...new Uint8Array(digest)].slice(0,12).map(x=>x.toString(16).padStart(2,"0")).join("");
 }

@@ -1,3 +1,4 @@
+import {handleTrustCenterRoutes,type TrustCenterEnv} from "../trust-center/routes";
 import {
   evaluateAgentRisk
 } from "./engine";
@@ -23,7 +24,7 @@ const json=(body:unknown,status=200)=>
     {status,headers}
   );
 
-type Env={
+type Env=TrustCenterEnv & {
   DATABASE_URL?:string;
 };
 
@@ -34,6 +35,9 @@ export async function handleRiskRoutes(
   env:Env,
   url:URL
 ):Promise<Response|null>{
+  if(url.pathname.startsWith("/api/trust-center"))
+    return handleTrustCenterRoutes(request,env,url);
+
   if(!url.pathname.startsWith("/api/risk"))
     return null;
 

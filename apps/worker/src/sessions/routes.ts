@@ -1,5 +1,7 @@
 import {getWallet} from "../wallets/repository";
-import {connectorStatus} from "../commerce/registry";
+import {getWalletReadiness} from "../wallets/policy";
+import {connectorStatus,type CommerceEnv} from "../commerce/registry";
+import type {AuthorizationContextEnv} from "../payments/authorization-context";
 import {addEvent,createSession,getEvents,getSession,listSessions} from "./repository";
 import {runPurchaseSession,resolveSessionStepUp} from "./orchestrator";
 
@@ -11,33 +13,20 @@ const headers={
 };
 const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers});
 
-type Env={
+type Env=CommerceEnv & AuthorizationContextEnv & {
   DATABASE_URL?:string;
   APPROVAL_SIGNING_SECRET?:string;
-  COMMERCE_CATALOG_URL?:string;
-  COMMERCE_MERCHANT_COUNTRY?:string;
-  SHOPIFY_STORE_DOMAIN?:string;
-  SHOPIFY_STOREFRONT_PUBLIC_TOKEN?:string;
-  SHOPIFY_STOREFRONT_PRIVATE_TOKEN?:string;
-  SHOPIFY_STOREFRONT_API_VERSION?:string;
-  FX_PROVIDER?:string;
-  FX_RATES_JSON?:string;
-  FX_QUOTE_TTL_SECONDS?:string;
-  FX_MAX_DRIFT_BPS?:string;
-  FX_REVALIDATE?:string;
 };
 
-function orchestratorEnv(env:Env){
-  return {
-    DATABASE_URL:env.DATABASE_URL!,APPROVAL_SIGNING_SECRET:env.APPROVAL_SIGNING_SECRET,
-    COMMERCE_CATALOG_URL:env.COMMERCE_CATALOG_URL,COMMERCE_MERCHANT_COUNTRY:env.COMMERCE_MERCHANT_COUNTRY,
-    SHOPIFY_STORE_DOMAIN:env.SHOPIFY_STORE_DOMAIN,SHOPIFY_STOREFRONT_PUBLIC_TOKEN:env.SHOPIFY_STOREFRONT_PUBLIC_TOKEN,
-    SHOPIFY_STOREFRONT_PRIVATE_TOKEN:env.SHOPIFY_STOREFRONT_PRIVATE_TOKEN,
-    SHOPIFY_STOREFRONT_API_VERSION:env.SHOPIFY_STOREFRONT_API_VERSION,
-    FX_PROVIDER:env.FX_PROVIDER,FX_RATES_JSON:env.FX_RATES_JSON,
-    FX_QUOTE_TTL_SECONDS:env.FX_QUOTE_TTL_SECONDS,FX_MAX_DRIFT_BPS:env.FX_MAX_DRIFT_BPS,
-    FX_REVALIDATE:env.FX_REVALIDATE
-  };
+/**
+ * Keep the whole commerce/authorization environment intact. V11.1 previously
+ * reconstructed a smaller object and silently dropped eBay credentials before
+ * the session runner executed. Spreading env preserves optional live connector,
+ * FX and PayeeLock configuration while still proving DATABASE_URL is present.
+ */
+export function buildOrchestratorEnv(env:Env){
+  if(!env.DATABASE_URL) throw new Error("DATABASE_NOT_CONFIGURED");
+  return {...env,DATABASE_URL:env.DATABASE_URL};
 }
 
 export async function handleSessionRoutes(request:Request,env:Env,url:URL):Promise<Response|null>{
@@ -61,8 +50,20 @@ export async function handleSessionRoutes(request:Request,env:Env,url:URL):Promi
 
       const wallet=await getWallet(env.DATABASE_URL,walletId);
       if(!wallet) return json({error:"WALLET_NOT_FOUND"},404);
+
+      // Reject invalid setup before creating another misleading BLOCKED session.
+      const readiness=getWalletReadiness(wallet);
+      if(!readiness.ready){
+        return json({
+          error:"WALLET_NOT_READY",
+          code:readiness.code,
+          message:readiness.message,
+          readiness
+        },409);
+      }
+
       const connector=connectorStatus(env).find(c=>c.id===connectorId&&c.enabled);
-      if(!connector) return json({error:"CONNECTOR_NOT_AVAILABLE"},400);
+      if(!connector) return json({error:"CONNECTOR_NOT_AVAILABLE",connectorId},400);
 
       const session=await createSession(env.DATABASE_URL,{
         walletId,userPrompt:prompt,connectorId,channel:channel as "WEB"|"WHATSAPP"|"API"
@@ -70,7 +71,9 @@ export async function handleSessionRoutes(request:Request,env:Env,url:URL):Promi
       await addEvent(env.DATABASE_URL,session.sessionId,"SESSION_CREATED",{channel,connectorId});
       await addEvent(env.DATABASE_URL,session.sessionId,"WALLET_ATTACHED",{
         walletId:wallet.walletId,walletName:wallet.name,countryCode:wallet.countryCode,currency:wallet.currency,
-        totalAuthority:wallet.totalAuthority,autoBuyLimit:wallet.autoBuyLimit,maxSingleTransaction:wallet.maxSingleTransaction
+        totalAuthority:wallet.totalAuthority,spentAmount:wallet.spentAmount,
+        remainingAuthority:readiness.remainingAuthority,validUntil:wallet.validUntil,
+        autoBuyLimit:wallet.autoBuyLimit,maxSingleTransaction:wallet.maxSingleTransaction
       });
       await addEvent(env.DATABASE_URL,session.sessionId,"USER_INTENT_RECEIVED",{prompt});
       return json({session,events:await getEvents(env.DATABASE_URL,session.sessionId)},201);
@@ -79,7 +82,7 @@ export async function handleSessionRoutes(request:Request,env:Env,url:URL):Promi
     const runMatch=url.pathname.match(/^\/api\/sessions\/([^/]+)\/run$/);
     if(request.method==="POST"&&runMatch){
       const sessionId=decodeURIComponent(runMatch[1]);
-      return json(await runPurchaseSession(orchestratorEnv(env),sessionId));
+      return json(await runPurchaseSession(buildOrchestratorEnv(env),sessionId));
     }
 
     const resolveMatch=url.pathname.match(/^\/api\/sessions\/([^/]+)\/step-up\/resolve$/);
@@ -88,7 +91,7 @@ export async function handleSessionRoutes(request:Request,env:Env,url:URL):Promi
       const b:any=await request.json();
       const action=String(b.action??"").toUpperCase();
       if(!["ALLOW_ONCE","RAISE_LIMIT","REJECT"].includes(action)) return json({error:"INVALID_STEP_UP_ACTION"},400);
-      return json(await resolveSessionStepUp(orchestratorEnv(env),sessionId,action as "ALLOW_ONCE"|"RAISE_LIMIT"|"REJECT"));
+      return json(await resolveSessionStepUp(buildOrchestratorEnv(env),sessionId,action as "ALLOW_ONCE"|"RAISE_LIMIT"|"REJECT"));
     }
 
     const sessionMatch=url.pathname.match(/^\/api\/sessions\/([^/]+)$/);

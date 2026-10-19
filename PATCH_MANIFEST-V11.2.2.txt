@@ -1,0 +1,19 @@
+IntentLock V11.2.2 — End-to-End UX incremental patch
+Base: V11.2.1 Unified UI + V11.2 TrustOps
+
+REPLACED / UPDATED
+apps/web/app/page.tsx
+apps/web/app/home.module.css
+apps/web/app/trust-center/page.tsx
+apps/web/app/trust-center/trust-center.module.css
+apps/web/app/components/Shell.tsx
+apps/web/app/components/WhatsAppDemoCard.tsx
+
+DOCS
+CHANGELOG-V11.2.2.md
+UPGRADE-V11.2.2.md
+PATCH_MANIFEST-V11.2.2.txt
+
+NO DATABASE MIGRATION.
+NO PAYMENT BACKEND CHANGE.
+NO EBAY CREDENTIAL CHANGE.

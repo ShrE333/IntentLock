@@ -37,6 +37,11 @@ export type WalletTransaction = {
   fxSource?: string;
   fxQuotedAt?: string;
   fxExpiresAt?: string;
+
+  // V11.2: stable payee identity binding. These are optional so old sessions
+  // preserve their historical quote hashes.
+  payeeProvider?: string;
+  payeeFingerprint?: string;
 };
 
 export type WalletEvaluation = {

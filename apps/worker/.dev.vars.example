@@ -32,6 +32,18 @@ RAZORPAY_ACCEPTED_CURRENCIES=INR
 # RAZORPAY_ALLOWED_BUYER_COUNTRIES=IN
 # RAZORPAY_ALLOWED_MERCHANT_COUNTRIES=IN
 
+# eBay Browse connector (V11.1)
+# Create keys at the eBay Developer Program. Sandbox and Production credentials
+# are different. The connector uses client-credentials OAuth and never exposes
+# the client secret to the browser.
+EBAY_ENV=sandbox
+EBAY_CLIENT_ID=YOUR_EBAY_SANDBOX_CLIENT_ID
+EBAY_CLIENT_SECRET=YOUR_EBAY_SANDBOX_CLIENT_SECRET
+EBAY_MARKETPLACE_ID=EBAY_US
+# Optional buyer context recommended by eBay for shipping/delivery estimates.
+# EBAY_ENDUSER_COUNTRY=US
+# EBAY_ENDUSER_POSTAL_CODE=95008
+
 # FX authorization layer.
 # "static" is deterministic and stable for a hackathon demo; proof receipts label
 # it DEMO_STATIC. Use FX_RATES_JSON to supply your own rates, or "frankfurter"
@@ -44,3 +56,18 @@ FX_MAX_DRIFT_BPS=100
 
 # Used only when a commerce connector does not provide merchantCountry.
 # COMMERCE_MERCHANT_COUNTRY=US
+
+# V11.2 PayeeLock
+# observe = bind + revalidate payee identity but do not require a registry match.
+# enforce = fail closed unless the payee appears in PAYEELOCK_TRUSTED_PAYEES_JSON.
+PAYEELOCK_MODE=observe
+# PAYEELOCK_TRUSTED_PAYEES_JSON=[{"provider":"ebay","payeeId":"seller_username","merchantCountry":"US","label":"Approved eBay seller"}]
+
+# Optional protected TrustOps mutation endpoint. Read-only Trust Center does not need this.
+# Generate a long random value and store it as a Worker secret for production.
+# TRUSTOPS_ADMIN_TOKEN=replace-with-long-random-secret
+
+# V11.4 Post-Purchase Guard
+# Refund requests are blocked when an unresolved PayPal dispute exists by default.
+REFUND_MAX_AGE_DAYS=30
+REFUND_BLOCK_ON_OPEN_DISPUTE=true

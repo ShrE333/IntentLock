@@ -1,0 +1,17 @@
+IntentLock V11.2.1 — Unified Product UI
+
+REPLACED
+apps/web/app/components/Shell.tsx
+apps/web/app/page.tsx
+apps/web/app/trust-center/page.tsx
+apps/web/app/trust-center/trust-center.module.css
+
+NEW
+apps/web/app/components/Shell.module.css
+apps/web/app/home.module.css
+CHANGELOG-V11.2.1.md
+UPGRADE-V11.2.1-UI.md
+PATCH_MANIFEST-V11.2.1.txt
+
+No backend files changed.
+No database migration required.

@@ -1,7 +1,8 @@
 import {getWallet} from "../wallets/repository";
 import {evaluateWalletTransaction} from "../wallets/policy";
 import {authorizeProductContext,type AuthorizationContextEnv} from "../payments/authorization-context";
-import {connectorStatus,getCommerceConnectors} from "./registry";
+import {connectorStatus,getCommerceConnectors,type CommerceEnv} from "./registry";
+import {planCommerceSearchQuery} from "./query-planner";
 
 const headers={
   "content-type":"application/json; charset=utf-8",
@@ -12,13 +13,8 @@ const headers={
 
 const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers});
 
-type Env=AuthorizationContextEnv & {
+type Env=AuthorizationContextEnv & CommerceEnv & {
   DATABASE_URL?:string;
-  COMMERCE_CATALOG_URL?:string;
-  SHOPIFY_STORE_DOMAIN?:string;
-  SHOPIFY_STOREFRONT_PUBLIC_TOKEN?:string;
-  SHOPIFY_STOREFRONT_PRIVATE_TOKEN?:string;
-  SHOPIFY_STOREFRONT_API_VERSION?:string;
 };
 
 export async function handleCommerceRoutes(
@@ -54,23 +50,22 @@ export async function handleCommerceRoutes(
     try{
       const body:any=await request.json();
       const walletId=String(body.walletId??"");
-      const query=String(body.query??"").trim();
+      const rawQuery=String(body.query??"").trim();
       const connectorId=String(body.connectorId??"demo-marketplace");
       if(!walletId) return json({error:"WALLET_ID_REQUIRED"},400);
-      if(!query) return json({error:"SEARCH_QUERY_REQUIRED"},400);
+      if(!rawQuery) return json({error:"SEARCH_QUERY_REQUIRED"},400);
 
       const wallet=await getWallet(env.DATABASE_URL,walletId);
       if(!wallet) return json({error:"WALLET_NOT_FOUND"},404);
       const connector=getCommerceConnectors(env).find(c=>c.info().id===connectorId);
       if(!connector) return json({error:"CONNECTOR_NOT_AVAILABLE"},400);
 
-      // Numeric wallet ceilings are in wallet currency and therefore MUST NOT be
-      // sent as a merchant-currency maxPrice filter. Normalize each candidate first.
+      // Search is based only on user product intent. Wallet rules are never sent
+      // to a marketplace as hidden filters; policy is applied after candidates
+      // return so ALLOW/STEP_UP/BLOCK remains independently explainable.
+      const searchQuery=planCommerceSearchQuery(rawQuery);
       const products=await connector.search({
-        query,
-        category:wallet.allowedCategories[0],
-        brands:wallet.allowedBrands,
-        requiredFeatures:wallet.requiredFeatures,
+        query:searchQuery,
         limit:Number(body.limit??10)
       });
 
@@ -102,7 +97,7 @@ export async function handleCommerceRoutes(
             walletCurrency:wallet.currency,
             fxQuote:null,
             policy:{
-              decision:"BLOCK",violations:["FX_OR_PAYMENT_CONTEXT_UNAVAILABLE"],
+              decision:"BLOCK",violations:["AUTHORIZATION_CONTEXT_UNAVAILABLE"],
               reasons:[error instanceof Error?error.message:String(error)],
               additionalAuthorityRequired:0,canAutoExecute:false,requiresHumanApproval:false
             },
@@ -119,7 +114,11 @@ export async function handleCommerceRoutes(
           currency:wallet.currency,autoBuyLimit:wallet.autoBuyLimit,
           maxSingleTransaction:wallet.maxSingleTransaction
         },
-        query,count:candidates.length,candidates
+        query:rawQuery,
+        searchQuery,
+        discoveryPolicySeparation:true,
+        count:candidates.length,
+        candidates
       });
     }catch(error){
       return json({

@@ -22,7 +22,7 @@ function decodeCanonicalBase64Url(value: string) {
 }
 
 export function canonicalWalletTransaction(tx: WalletTransaction) {
-  return JSON.stringify({
+  const core:Record<string,unknown>={
     amount: tx.amount,
     brand: tx.brand.trim(),
     category: tx.category.trim(),
@@ -43,7 +43,17 @@ export function canonicalWalletTransaction(tx: WalletTransaction) {
     fxSource: tx.fxSource ?? null,
     fxQuotedAt: tx.fxQuotedAt ?? null,
     fxExpiresAt: tx.fxExpiresAt ?? null
-  });
+  };
+
+  // Important compatibility rule: do not add these keys to old transactions
+  // that were authorized before V11.2, otherwise their historical quote hash
+  // would change merely because the software was upgraded.
+  if(tx.payeeProvider!==undefined||tx.payeeFingerprint!==undefined){
+    core.payeeProvider=tx.payeeProvider??null;
+    core.payeeFingerprint=tx.payeeFingerprint??null;
+  }
+
+  return JSON.stringify(core);
 }
 
 export async function sha256Hex(value: string) {

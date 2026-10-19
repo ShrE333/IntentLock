@@ -1,0 +1,35 @@
+IntentLock V11.2 — TrustOps incremental patch
+Base: V11.1 eBay Integration extracted over the committed V11.0.3 recovery baseline.
+
+NEW
+apps/worker/src/commerce/payee-lock.ts
+apps/worker/src/trust-center/routes.ts
+apps/worker/src/tests/payee-lock.test.ts
+apps/worker/src/tests/paypal-capture-read.test.ts
+apps/worker/scripts/trustops-smoke.mjs
+apps/worker/scripts/trustops-reconcile.mjs
+apps/web/app/trust-center/page.tsx
+apps/web/app/trust-center/trust-center.module.css
+CHANGELOG-V11.2.md
+UPGRADE-V11.2.md
+PATCH_MANIFEST-V11.2.txt
+
+REPLACED / UPDATED
+apps/worker/.dev.vars.example
+apps/worker/src/commerce/types.ts
+apps/worker/src/commerce/ebay-connector.ts
+apps/worker/src/commerce/demo-catalog.ts
+apps/worker/src/commerce/paypal-demo-catalog.ts
+apps/worker/src/payments/context-types.ts
+apps/worker/src/payments/authorization-context.ts
+apps/worker/src/wallets/types.ts
+apps/worker/src/wallets/crypto.ts
+apps/worker/src/sessions/orchestrator.ts
+apps/worker/src/session-payments/proof.ts
+apps/worker/src/session-payments/providers/paypal.ts
+apps/worker/src/risk/routes.ts
+apps/web/app/components/Shell.tsx
+apps/web/app/page.tsx
+apps/web/app/commerce/page.tsx
+
+NO DATABASE MIGRATION REQUIRED.

@@ -1,19 +1,15 @@
 import {getWallet} from "../wallets/repository";
 import {evaluateWalletTransaction} from "../wallets/policy";
 import {issueStepUpRequest,resolveStepUpRequest} from "../wallets/stepup";
-import {getCommerceConnectors} from "../commerce/registry";
+import {getCommerceConnectors,type CommerceEnv} from "../commerce/registry";
 import type {CommerceProduct} from "../commerce/types";
 import {authorizeProductContext,type AuthorizationContextEnv} from "../payments/authorization-context";
+import {planCommerceSearchQuery} from "../commerce/query-planner";
 import {addEvent,addEvents,getEvents,getSession,updateSession} from "./repository";
 
-type Env=AuthorizationContextEnv & {
+type Env=AuthorizationContextEnv & CommerceEnv & {
   DATABASE_URL:string;
   APPROVAL_SIGNING_SECRET?:string;
-  COMMERCE_CATALOG_URL?:string;
-  SHOPIFY_STORE_DOMAIN?:string;
-  SHOPIFY_STOREFRONT_PUBLIC_TOKEN?:string;
-  SHOPIFY_STOREFRONT_PRIVATE_TOKEN?:string;
-  SHOPIFY_STOREFRONT_API_VERSION?:string;
 };
 
 type EvaluatedCandidate={
@@ -40,12 +36,25 @@ export async function runPurchaseSession(env:Env,sessionId:string){
     walletCurrency:wallet.currency,buyerCountry:wallet.countryCode
   });
 
-  // Do not push the wallet's numeric ceiling into a marketplace that may quote
-  // a different currency. IntentLock converts each candidate before policy evaluation.
-  const products=await connector.search({
-    query:session.userPrompt,category:wallet.allowedCategories[0],brands:wallet.allowedBrands,
-    requiredFeatures:wallet.requiredFeatures,limit:12
+  const discoveryQuery=planCommerceSearchQuery(session.userPrompt);
+  await addEvent(env.DATABASE_URL,sessionId,"DISCOVERY_QUERY_PLANNED",{
+    originalPrompt:session.userPrompt,searchQuery:discoveryQuery,
+    note:"Commerce discovery uses the user's product intent only. Wallet policy is evaluated afterwards and cannot silently rewrite search results."
   });
+
+  // Discovery and authorization are deliberately separated. Do not inject allowed
+  // brands/categories/features into marketplace search: doing so hides blocked
+  // candidates and makes the policy engine look hard-coded.
+  const products=await connector.search({query:discoveryQuery,limit:12});
+
+  if(!products.length){
+    await updateSession(env.DATABASE_URL,sessionId,{status:"BLOCKED",selectedDecision:"BLOCK"});
+    await addEvent(env.DATABASE_URL,sessionId,"COMMERCE_NO_RESULTS",{
+      connector:connector.info().name,searchQuery:discoveryQuery,
+      reason:"Marketplace returned no candidates; this is not a wallet-policy rejection."
+    });
+    return {session:await getSession(env.DATABASE_URL,sessionId),events:await getEvents(env.DATABASE_URL,sessionId),candidates:[]};
+  }
 
   const evaluated:EvaluatedCandidate[]=[];
   const trace:{type:string;payload:Record<string,unknown>}[]=[];
@@ -58,14 +67,14 @@ export async function runPurchaseSession(env:Env,sessionId:string){
       const reason=error instanceof Error?error.message:String(error);
       const product={...rawProduct};
       evaluated.push({
-        product,decision:"BLOCK",violations:[reason],reasons:["Currency normalization failed."],
+        product,decision:"BLOCK",violations:[reason],reasons:["Authorization context could not be safely bound."],
         additionalAuthorityRequired:0,walletAmount:0,walletCurrency:wallet.currency
       });
       trace.push({type:"PRODUCT_FOUND",payload:{
         productId:product.id,title:product.title,merchant:product.merchant,
         merchantCountry:product.merchantCountry??"UNKNOWN",price:product.price,currency:product.currency,brand:product.brand
       }});
-      trace.push({type:"FX_NORMALIZATION_BLOCKED",payload:{productId:product.id,reason}});
+      trace.push({type:"AUTHORIZATION_CONTEXT_BLOCKED",payload:{productId:product.id,reason}});
       continue;
     }
 
@@ -75,6 +84,20 @@ export async function runPurchaseSession(env:Env,sessionId:string){
       productId:product.id,title:product.title,merchant:product.merchant,
       merchantCountry:authorized.context.merchantCountry,price:product.price,currency:product.currency,brand:product.brand
     }});
+
+    if(authorized.context.payeeLock){
+      trace.push({type:"PAYEE_IDENTITY_BOUND",payload:{
+        productId:product.id,
+        provider:authorized.context.payeeLock.provider,
+        payeeId:authorized.context.payeeLock.payeeId,
+        payeeType:authorized.context.payeeLock.payeeType,
+        merchantCountry:authorized.context.payeeLock.merchantCountry,
+        fingerprint:authorized.context.payeeLock.fingerprint,
+        mode:authorized.context.payeeLock.mode,
+        trustStatus:authorized.context.payeeLock.trustStatus,
+        trustedLabel:authorized.context.payeeLock.trustedLabel
+      }});
+    }
 
     if(product.merchantMessage){
       trace.push({type:"MERCHANT_TEXT_OBSERVED",payload:{
@@ -104,12 +127,16 @@ export async function runPurchaseSession(env:Env,sessionId:string){
       violations:evaluation.violations,additionalAuthorityRequired:evaluation.additionalAuthorityRequired,
       presentmentAmount:product.price,presentmentCurrency:product.currency,
       walletAmount:tx.amount,walletCurrency:tx.currency,
-      buyerCountry:authorized.context.buyerCountry,merchantCountry:authorized.context.merchantCountry
+      buyerCountry:authorized.context.buyerCountry,merchantCountry:authorized.context.merchantCountry,
+      payeeFingerprint:authorized.context.payeeLock?.fingerprint??null
     }});
   }
 
-  const allowed=evaluated.filter(x=>x.decision==="ALLOW").sort((a,b)=>a.walletAmount-b.walletAmount);
-  const stepUps=evaluated.filter(x=>x.decision==="STEP_UP").sort((a,b)=>a.walletAmount-b.walletAmount);
+  // Preserve connector relevance order. The old implementation re-sorted by
+  // wallet cost, which effectively hard-coded "cheapest wins" even when the
+  // marketplace ranked another listing as a better match to the user's request.
+  const allowed=evaluated.filter(x=>x.decision==="ALLOW");
+  const stepUps=evaluated.filter(x=>x.decision==="STEP_UP");
 
   if(allowed.length){
     const selected=allowed[0];
@@ -120,28 +147,25 @@ export async function runPurchaseSession(env:Env,sessionId:string){
       productId:selected.product.id,title:selected.product.title,
       presentmentAmount:selected.product.price,presentmentCurrency:selected.product.currency,
       walletAmount:selected.walletAmount,walletCurrency:selected.walletCurrency,
-      reason:"LOWEST_WALLET_COST_AUTONOMOUSLY_ALLOWED"
+      payeeFingerprint:selected.product.authorizationContext?.payeeLock?.fingerprint??null,
+      reason:"BEST_AUTHORIZED_MATCH_IN_DISCOVERY_ORDER"
     }});
     trace.push({type:"AUTO_AUTHORIZED",payload:{
       productId:selected.product.id,walletAmount:selected.walletAmount,walletCurrency:selected.walletCurrency,
-      note:"Candidate is inside delegated authority after currency normalization."
+      note:"Candidate is inside delegated authority after currency normalization and payee binding."
     }});
   }else if(stepUps.length){
     const selected=stepUps[0];
     if(!selected.product.authorizationContext) throw new Error("AUTHORIZATION_CONTEXT_MISSING");
+    const c=selected.product.authorizationContext;
     const tx={
       productName:selected.product.title,category:selected.product.category,brand:selected.product.brand,
-      amount:selected.product.authorizationContext.walletAmount,
-      currency:selected.product.authorizationContext.walletCurrency,quantity:1,features:selected.product.features,
-      presentmentAmount:selected.product.authorizationContext.presentmentAmount,
-      presentmentCurrency:selected.product.authorizationContext.presentmentCurrency,
-      buyerCountry:selected.product.authorizationContext.buyerCountry,
-      merchantCountry:selected.product.authorizationContext.merchantCountry,
-      fxQuoteId:selected.product.authorizationContext.fxQuote?.quoteId,
-      fxRate:selected.product.authorizationContext.fxQuote?.rate,
-      fxSource:selected.product.authorizationContext.fxQuote?.source,
-      fxQuotedAt:selected.product.authorizationContext.fxQuote?.quotedAt,
-      fxExpiresAt:selected.product.authorizationContext.fxQuote?.expiresAt
+      amount:c.walletAmount,currency:c.walletCurrency,quantity:1,features:selected.product.features,
+      presentmentAmount:c.presentmentAmount,presentmentCurrency:c.presentmentCurrency,
+      buyerCountry:c.buyerCountry,merchantCountry:c.merchantCountry,
+      fxQuoteId:c.fxQuote?.quoteId,fxRate:c.fxQuote?.rate,fxSource:c.fxQuote?.source,
+      fxQuotedAt:c.fxQuote?.quotedAt,fxExpiresAt:c.fxQuote?.expiresAt,
+      payeeProvider:c.payeeLock?.provider,payeeFingerprint:c.payeeLock?.fingerprint
     };
     const evaluation=evaluateWalletTransaction(wallet,tx);
     const stepUp=await issueStepUpRequest(env.DATABASE_URL,wallet,tx,evaluation);
@@ -153,7 +177,8 @@ export async function runPurchaseSession(env:Env,sessionId:string){
       productId:selected.product.id,title:selected.product.title,
       presentmentAmount:selected.product.price,presentmentCurrency:selected.product.currency,
       walletAmount:selected.walletAmount,walletCurrency:selected.walletCurrency,
-      reason:"BEST_VALID_CANDIDATE_REQUIRES_STEP_UP"
+      payeeFingerprint:c.payeeLock?.fingerprint??null,
+      reason:"BEST_STEP_UP_MATCH_IN_DISCOVERY_ORDER"
     }});
     trace.push({type:"STEP_UP_REQUIRED",payload:{
       requestId:stepUp?.requestId??null,requestedAmount:selected.walletAmount,

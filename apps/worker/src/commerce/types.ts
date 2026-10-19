@@ -1,5 +1,13 @@
 import type {PaymentAuthorizationContext} from "../payments/context-types";
 
+export type CommerceProductSource = {
+  provider:string;
+  marketplaceId?:string;
+  listingId?:string;
+  payeeId?:string;
+  payeeType?:"EBAY_SELLER"|"SHOPIFY_STORE"|"MARKETPLACE_MERCHANT"|"EXTERNAL_PAYEE";
+};
+
 export type CommerceProduct = {
   id:string;
   title:string;
@@ -14,6 +22,7 @@ export type CommerceProduct = {
   productUrl?:string;
   imageUrl?:string;
   merchantMessage?:string;
+  source?:CommerceProductSource;
 
   // Added only after IntentLock has normalized cross-currency/country facts.
   // Connectors should not trust or populate this field themselves.
@@ -32,7 +41,7 @@ export type CommerceSearchQuery = {
 export type CommerceConnectorInfo = {
   id:string;
   name:string;
-  kind:"DEMO"|"PAYPAL_DEMO"|"HTTP_JSON"|"SHOPIFY"|"AMAZON_CREATORS"|"INDIAMART";
+  kind:"DEMO"|"PAYPAL_DEMO"|"EBAY"|"HTTP_JSON"|"SHOPIFY"|"AMAZON_CREATORS"|"INDIAMART";
   enabled:boolean;
   description:string;
 };

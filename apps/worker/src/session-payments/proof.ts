@@ -16,7 +16,6 @@ import {appendSessionAuditEvent} from "./audit";
 export async function createProofReceipt(db:string,signingSecret:string,sessionId:string){
   const existing=await getProofReceipt(db,sessionId);
   if(existing){
-    // Recover a crash after receipt insertion but before session attachment.
     await setSessionProofReceipt(db,sessionId,existing.receiptId);
     return existing;
   }
@@ -50,7 +49,7 @@ export async function createProofReceipt(db:string,signingSecret:string,sessionI
   const paymentContext=session.selectedProduct.authorizationContext??null;
 
   const payload={
-    version:"intentlock-proof-v1.2",
+    version:"intentlock-proof-v1.3",
     generatedAt:new Date().toISOString(),
 
     session:{
@@ -78,8 +77,11 @@ export async function createProofReceipt(db:string,signingSecret:string,sessionI
       merchantCountry:session.selectedProduct.merchantCountry??paymentContext?.merchantCountry??null,
       amount:session.selectedProduct.price,
       currency:session.selectedProduct.currency,
-      features:session.selectedProduct.features
+      features:session.selectedProduct.features,
+      source:session.selectedProduct.source??null
     },
+
+    payeeLock:paymentContext?.payeeLock??null,
 
     paymentContext:{
       buyerCountry:paymentContext?.buyerCountry??wallet.countryCode??"IN",
@@ -89,7 +91,8 @@ export async function createProofReceipt(db:string,signingSecret:string,sessionI
       walletAmount:paymentContext?.walletAmount??Number(ledger.amount),
       walletCurrency:paymentContext?.walletCurrency??String(ledger.currency),
       fxQuote:paymentContext?.fxQuote??null,
-      fxBound:Boolean(paymentContext?.fxQuote)
+      fxBound:Boolean(paymentContext?.fxQuote),
+      payeeFingerprint:paymentContext?.payeeLock?.fingerprint??null
     },
 
     authorization:{
@@ -148,7 +151,8 @@ export async function createProofReceipt(db:string,signingSecret:string,sessionI
   await appendSessionAuditEvent(db,sessionId,"PROOF_RECEIPT_CREATED",{
     receiptId:receipt.receiptId,proofHash:receipt.proofHash,proofSignature:receipt.proofSignature,
     evidenceAuditHeadHash:receipt.evidenceAuditHeadHash,
-    paymentProvider:payment.provider
+    paymentProvider:payment.provider,
+    payeeFingerprint:paymentContext?.payeeLock?.fingerprint??null
   });
 
   return receipt;

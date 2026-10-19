@@ -1,0 +1,27 @@
+IntentLock V11.4 — Post-Purchase Guard incremental patch
+Base: V11.3 Transaction Reliability
+
+NEW
+apps/worker/db/v11_4_post_purchase_guard.sql
+apps/worker/src/post-purchase/types.ts
+apps/worker/src/post-purchase/policy.ts
+apps/worker/src/post-purchase/repository.ts
+apps/worker/src/post-purchase/service.ts
+apps/worker/src/tests/refund-firewall.test.ts
+apps/worker/src/tests/refund-ledger-sql.test.ts
+apps/worker/src/tests/paypal-post-purchase.test.ts
+apps/worker/scripts/post-purchase-smoke.mjs
+apps/web/app/post-purchase/page.tsx
+apps/web/app/post-purchase/post-purchase.module.css
+CHANGELOG-V11.4.md
+UPGRADE-V11.4.md
+PATCH_MANIFEST-V11.4.txt
+
+UPDATED / REPLACED
+apps/worker/.dev.vars.example
+apps/worker/src/session-payments/providers/paypal.ts
+apps/worker/src/trust-center/routes.ts
+apps/web/app/components/Shell.tsx
+
+DATABASE MIGRATION REQUIRED
+apps/worker/db/v11_4_post_purchase_guard.sql
