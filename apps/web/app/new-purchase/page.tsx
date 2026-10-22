@@ -271,7 +271,7 @@ export default function AutonomousPurchasePage(){
 
   return <Shell><div className="page">
     <header className="pageHeader"><div>
-      <div className="eyebrow">INTENTLOCK V11.3 · TRANSACTION RELIABILITY</div>
+      <div className="eyebrow">LIVE PURCHASE · DETERMINISTIC POLICY</div>
       <h1>Autonomous Purchase</h1>
       <p>Discovery finds candidates. Wallet policy evaluates them independently. Payment then moves through an explicit provider state machine until verified settlement.</p>
     </div>{session&&<span className="sessionIdBadge">{session.sessionId}</span>}</header>

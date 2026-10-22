@@ -90,7 +90,7 @@ export default function PostPurchasePage(){
 
   return <Shell><div className={styles.page}>
     <header className={styles.header}>
-      <span>INTENTLOCK V11.4.1 · POST-PURCHASE GUARD</span>
+      <span>POST-PURCHASE · REFUND & DISPUTE CONTROL</span>
       <h1>A payment is not finished when capture succeeds.</h1>
       <p>Refunds can double-pay a buyer, restore the wrong budget, collide with disputes, or be replayed. This surface keeps the same transaction under deterministic control after purchase.</p>
     </header>

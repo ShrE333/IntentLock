@@ -113,13 +113,13 @@ export default function WalletsPage(){
 
   return <Shell><div className="page">
     <header className="pageHeader"><div>
-      <div className="eyebrow">INTENTLOCK V11.3 · DELEGATED SPENDING AUTHORITY</div>
+      <div className="eyebrow">DELEGATED SPENDING AUTHORITY</div>
       <h1>Intent Wallets</h1>
       <p>Wallet rules are live policy, not demo outcomes. Expiry, remaining authority, brand/category restrictions and limits are evaluated from the selected wallet on every transaction.</p>
     </div></header>
 
     <section className="walletHero"><div>
-      <span className="miniLabel">V11.0.1 · MULTI-CURRENCY</span>
+      <span className="miniLabel">CROSS-CURRENCY AUTHORITY</span>
       <h2>An INR wallet can authorize a USD, EUR, GBP or SGD checkout without silently changing its budget.</h2>
       <p>IntentLock converts the merchant quote into wallet authority, hashes the FX facts into the authorization, then selects a payment rail by capability.</p>
     </div></section>

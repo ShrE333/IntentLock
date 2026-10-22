@@ -234,7 +234,7 @@ export default function TrustCenterPage(){
             <div><span>Country</span><strong>{payee.merchantCountry}</strong></div>
             <div className={styles.hashRow}><span>Bound fingerprint</span><code>{payee.fingerprint}</code></div>
             <p>If the structured seller identity changes during revalidation, this authorization cannot be reused.</p>
-          </div>:<LegacyNote text="This PurchaseSession was created before PayeeLock was added, so it has no payee fingerprint. New V11.2+ sessions bind seller identity automatically. The UI does not pretend legacy evidence exists."/>}
+          </div>:<LegacyNote text="This PurchaseSession was created before PayeeLock was added, so it has no payee fingerprint. New TRUST CENTER+ sessions bind seller identity automatically. The UI does not pretend legacy evidence exists."/>}
         </article>
 
         <article className={styles.panel}>
