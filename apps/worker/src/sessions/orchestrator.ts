@@ -5,7 +5,9 @@ import {getCommerceConnectors,type CommerceEnv} from "../commerce/registry";
 import type {CommerceProduct} from "../commerce/types";
 import {authorizeProductContext,type AuthorizationContextEnv} from "../payments/authorization-context";
 import {planCommerceSearchQuery} from "../commerce/query-planner";
-import {addEvent,addEvents,getEvents,getSession,updateSession} from "./repository";
+import {assessAndTighten} from '../risk/tighten';
+import {transactionFromAuthorizationContext} from '../payments/authorization-context';
+import {addEvent,addEvents,getEvents,getSession,updateSession,claimSessionRun} from "./repository";
 
 type Env=AuthorizationContextEnv & CommerceEnv & {
   DATABASE_URL:string;
@@ -25,12 +27,14 @@ type EvaluatedCandidate={
 export async function runPurchaseSession(env:Env,sessionId:string){
   const session=await getSession(env.DATABASE_URL,sessionId);
   if(!session) throw new Error("SESSION_NOT_FOUND");
+  if(session.connectorId==='shopify-global-catalog')throw new Error('COMMERCE_DISCOVERY_ONLY');
+  if(session.status!=='CREATED') throw new Error(`SESSION_NOT_RUNNABLE:${session.status}`);
   const wallet=await getWallet(env.DATABASE_URL,session.walletId);
   if(!wallet) throw new Error("WALLET_NOT_FOUND");
   const connector=getCommerceConnectors(env).find(c=>c.info().id===session.connectorId);
   if(!connector) throw new Error("CONNECTOR_NOT_AVAILABLE");
 
-  await updateSession(env.DATABASE_URL,sessionId,{status:"SEARCHING"});
+  if(!await claimSessionRun(env.DATABASE_URL,sessionId)) throw new Error('SESSION_RUN_ALREADY_CLAIMED');
   await addEvent(env.DATABASE_URL,sessionId,"SEARCH_STARTED",{
     connector:connector.info().name,query:session.userPrompt,
     walletCurrency:wallet.currency,buyerCountry:wallet.countryCode
@@ -62,7 +66,7 @@ export async function runPurchaseSession(env:Env,sessionId:string){
   for(const rawProduct of products){
     let authorized;
     try{
-      authorized=await authorizeProductContext(env,wallet,rawProduct);
+      authorized=await authorizeProductContext(env,wallet,rawProduct,connector.info().id);
     }catch(error){
       const reason=error instanceof Error?error.message:String(error);
       const product={...rawProduct};
@@ -135,8 +139,21 @@ export async function runPurchaseSession(env:Env,sessionId:string){
   // Preserve connector relevance order. The old implementation re-sorted by
   // wallet cost, which effectively hard-coded "cheapest wins" even when the
   // marketplace ranked another listing as a better match to the user's request.
-  const allowed=evaluated.filter(x=>x.decision==="ALLOW");
-  const stepUps=evaluated.filter(x=>x.decision==="STEP_UP");
+  const chosen=evaluated.find(x=>x.decision==='ALLOW')??evaluated.find(x=>x.decision==='STEP_UP');
+  if(chosen?.product.authorizationContext){
+    const tx=transactionFromAuthorizationContext(chosen.product,chosen.product.authorizationContext);
+    const tightened=await assessAndTighten(env.DATABASE_URL,{
+      sessionId,walletId:wallet.walletId,agentId:'intentlock-purchase-agent',merchant:chosen.product.merchant,
+      amount:tx.amount,currency:tx.currency,policyDecision:chosen.decision,
+      selectedMerchantMessage:chosen.product.merchantMessage,searchMerchantMessages:products.map(p=>p.merchantMessage??'')
+    },evaluateWalletTransaction(wallet,tx));
+    chosen.decision=tightened.evaluation.decision;
+    chosen.reasons=tightened.evaluation.reasons;
+    chosen.additionalAuthorityRequired=tightened.evaluation.additionalAuthorityRequired;
+    trace.push({type:'AGENT_RISK_ASSESSED',payload:{assessmentId:tightened.assessment.assessmentId,riskAction:tightened.assessment.riskAction,trustScore:tightened.assessment.trustScore}});
+  }
+  const allowed=chosen?.decision==='ALLOW'?[chosen]:[];
+  const stepUps=chosen?.decision==='STEP_UP'?[chosen]:[];
 
   if(allowed.length){
     const selected=allowed[0];
@@ -165,9 +182,9 @@ export async function runPurchaseSession(env:Env,sessionId:string){
       buyerCountry:c.buyerCountry,merchantCountry:c.merchantCountry,
       fxQuoteId:c.fxQuote?.quoteId,fxRate:c.fxQuote?.rate,fxSource:c.fxQuote?.source,
       fxQuotedAt:c.fxQuote?.quotedAt,fxExpiresAt:c.fxQuote?.expiresAt,
-      payeeProvider:c.payeeLock?.provider,payeeFingerprint:c.payeeLock?.fingerprint
+      payeeProvider:c.payeeLock?.provider,payeeFingerprint:c.payeeLock?.fingerprint,recipientFingerprint:c.recipient?.fingerprint
     };
-    const evaluation=evaluateWalletTransaction(wallet,tx);
+    const evaluation={...evaluateWalletTransaction(wallet,tx),decision:'STEP_UP' as const,additionalAuthorityRequired:selected.additionalAuthorityRequired,canAutoExecute:false,requiresHumanApproval:true};
     const stepUp=await issueStepUpRequest(env.DATABASE_URL,wallet,tx,evaluation);
     await updateSession(env.DATABASE_URL,sessionId,{
       status:"AWAITING_STEP_UP",selectedProduct:selected.product,selectedDecision:"STEP_UP",
@@ -196,6 +213,7 @@ export async function runPurchaseSession(env:Env,sessionId:string){
 export async function resolveSessionStepUp(env:Env,sessionId:string,action:"ALLOW_ONCE"|"RAISE_LIMIT"|"REJECT"){
   const session=await getSession(env.DATABASE_URL,sessionId);
   if(!session) throw new Error("SESSION_NOT_FOUND");
+  if(session.status!=='AWAITING_STEP_UP') throw new Error(`SESSION_NOT_AWAITING_STEP_UP:${session.status}`);
   if(!session.stepUpRequestId) throw new Error("SESSION_HAS_NO_STEP_UP_REQUEST");
   if(!env.APPROVAL_SIGNING_SECRET) throw new Error("APPROVAL_SIGNING_SECRET_NOT_CONFIGURED");
   const wallet=await getWallet(env.DATABASE_URL,session.walletId);
@@ -203,10 +221,8 @@ export async function resolveSessionStepUp(env:Env,sessionId:string,action:"ALLO
   const result=await resolveStepUpRequest(env.DATABASE_URL,env.APPROVAL_SIGNING_SECRET,wallet,session.stepUpRequestId,action);
 
   if(action==="REJECT"){
-    await updateSession(env.DATABASE_URL,sessionId,{status:"REJECTED"});
     await addEvent(env.DATABASE_URL,sessionId,"STEP_UP_REJECTED",{requestId:session.stepUpRequestId});
   }else{
-    await updateSession(env.DATABASE_URL,sessionId,{status:"READY_TO_PAY",authorizationId:result.authorizationId??null});
     await addEvent(env.DATABASE_URL,sessionId,action==="ALLOW_ONCE"?"STEP_UP_APPROVED_ONCE":"AUTO_LIMIT_RAISED",{
       requestId:session.stepUpRequestId,authorizationId:result.authorizationId??null,
       newAutoBuyLimit:result.newAutoBuyLimit??null,paymentAllowed:result.paymentAllowed

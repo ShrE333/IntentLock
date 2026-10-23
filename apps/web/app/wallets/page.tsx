@@ -1,14 +1,15 @@
 "use client";
 
 import {useEffect,useMemo,useState} from "react";
+import {WalletAuthorityComposer} from '../components/WalletAuthorityComposer';
 import {Shell} from "../components/Shell";
 import {getJson,postJson} from "../lib";
 
 type Wallet={
-  walletId:string;name:string;countryCode:string;currency:string;totalAuthority:number;spentAmount:number;
+  walletId:string;name:string;countryCode:string;currency:string;totalAuthority:number;spentAmount:number;reservedAmount?:number;
   autoBuyLimit:number;maxSingleTransaction:number;allowedCategories:string[];
   allowedBrands:string[];blockedBrands:string[];requiredFeatures:string[];
-  validUntil:string;status:"ACTIVE"|"REVOKED";
+  excludedConditions?:string[];validUntil:string;status:"ACTIVE"|"REVOKED";
 };
 
 type Evaluation={
@@ -35,6 +36,7 @@ const money=(n:number,currency:string)=>new Intl.NumberFormat("en-US",{
 }).format(n);
 
 export default function WalletsPage(){
+  const [loading,setLoading]=useState(true);
   const [wallets,setWallets]=useState<Wallet[]>([]);
   const [selectedId,setSelectedId]=useState("");
   const [evaluation,setEvaluation]=useState<Evaluation|null>(null);
@@ -44,15 +46,15 @@ export default function WalletsPage(){
   const [error,setError]=useState("");
 
   const [form,setForm]=useState({
-    name:"Global Electronics",countryCode:"IN",currency:"INR",totalAuthority:"10000",
-    autoBuyLimit:"6000",maxSingleTransaction:"7500",allowedCategories:"electronics",
+    name:"Sandbox Electronics",countryCode:"US",currency:"USD",totalAuthority:"100",
+    autoBuyLimit:"55",maxSingleTransaction:"75",allowedCategories:"electronics",
     allowedBrands:"Sony, Bose",blockedBrands:"Boat",requiredFeatures:"wireless, ANC",
-    validityHours:"72"
+    validityHours:"24"
   });
 
   const [tx,setTx]=useState({
     productName:"Sony Wireless ANC Headphones",category:"electronics",brand:"Sony",
-    amount:"5000",quantity:"1",features:"wireless, ANC"
+    amount:"49",quantity:"1",features:"wireless, ANC"
   });
 
   const selected=useMemo(()=>wallets.find(w=>w.walletId===selectedId)??null,[wallets,selectedId]);
@@ -63,6 +65,7 @@ export default function WalletsPage(){
       setWallets(r.wallets);
       if(!selectedId&&r.wallets[0]) setSelectedId(r.wallets[0].walletId);
     }catch(e){setError(e instanceof Error?e.message:String(e));}
+    finally{setLoading(false);}
   }
   useEffect(()=>{load();},[]);
 
@@ -113,16 +116,18 @@ export default function WalletsPage(){
 
   return <Shell><div className="page">
     <header className="pageHeader"><div>
-      <div className="eyebrow">INTENTLOCK V11.3 · DELEGATED SPENDING AUTHORITY</div>
+      <div className="eyebrow">DELEGATED SPENDING AUTHORITY</div>
       <h1>Intent Wallets</h1>
       <p>Wallet rules are live policy, not demo outcomes. Expiry, remaining authority, brand/category restrictions and limits are evaluated from the selected wallet on every transaction.</p>
     </div></header>
 
     <section className="walletHero"><div>
-      <span className="miniLabel">V11.0.1 · MULTI-CURRENCY</span>
+      <span className="miniLabel">CROSS-CURRENCY AUTHORITY</span>
       <h2>An INR wallet can authorize a USD, EUR, GBP or SGD checkout without silently changing its budget.</h2>
       <p>IntentLock converts the merchant quote into wallet authority, hashes the FX facts into the authorization, then selects a payment rail by capability.</p>
     </div></section>
+
+    <WalletAuthorityComposer onCreated={()=>{void load();}}/>
 
     <div className="walletTopGrid">
       <article className="card">
@@ -146,13 +151,15 @@ export default function WalletsPage(){
       <article className="card">
         <div className="cardHeader"><div><h2>Active Wallets</h2><p>Delegated authority currently stored in Neon.</p></div><span className="pill">{wallets.length} TOTAL</span></div>
         <div className="walletList">
-          {!wallets.length&&<div className="walletEmpty">No Intent Wallet yet.</div>}
+          {loading?<div className="walletEmpty" role="status">Loading Intent Wallets...</div>:!wallets.length&&<div className="walletEmpty">No Intent Wallet yet.</div>}
           {wallets.map(w=>{const expired=new Date(w.validUntil).getTime()<=Date.now();return <button key={w.walletId} className={w.walletId===selectedId?"walletListItem active":"walletListItem"} onClick={()=>{setSelectedId(w.walletId);setEvaluation(null);setStepUp(null);setResolution(null);}}>
-            <div><strong>{w.name}</strong><span>{money(w.totalAuthority-w.spentAmount,w.currency)} remaining · expires {new Date(w.validUntil).toLocaleString()}</span></div><span className="walletStatus">{w.countryCode} · {w.currency} · {w.status!=="ACTIVE"?"REVOKED":expired?"EXPIRED":"READY"}</span>
+            <div><strong>{w.name}</strong><span>{money(w.totalAuthority-w.spentAmount-(w.reservedAmount??0),w.currency)} available · {money(w.reservedAmount??0,w.currency)} reserved · expires {new Date(w.validUntil).toLocaleString()}</span></div><span className="walletStatus">{w.countryCode} · {w.currency} · {w.status!=="ACTIVE"?"REVOKED":expired?"EXPIRED":"READY"}</span>
           </button>;})}
         </div>
       </article>
     </div>
+
+    {!!selected?.excludedConditions?.length&&<div className="alert alertInfo">This wallet requires independently verified product condition. Current catalog adapters cannot establish that evidence, so purchases remain blocked.</div>}
 
     {selected&&<section className="walletDecisionGrid">
       <article className="card"><div className="cardHeader"><div><span className="miniLabel">SELECTED WALLET</span><h2>{selected.name}</h2></div><span className="pill pillSuccess">{selected.countryCode} · {selected.status}</span></div>
@@ -161,6 +168,7 @@ export default function WalletsPage(){
           <Metric label="Auto-Buy" value={`≤ ${money(selected.autoBuyLimit,selected.currency)}`} success/>
           <Metric label="Step-Up Zone" value={`${money(selected.autoBuyLimit,selected.currency)}–${money(selected.maxSingleTransaction,selected.currency)}`}/>
           <Metric label="Hard Ceiling" value={money(selected.maxSingleTransaction,selected.currency)}/>
+          <Metric label="Excluded Conditions" value={selected.excludedConditions?.join(", ")||"None"}/>
           <Metric label="Valid Until" value={new Date(selected.validUntil).toLocaleString()}/>
         </div>
       </article>

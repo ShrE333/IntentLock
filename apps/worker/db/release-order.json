@@ -1,0 +1,21 @@
+[
+ "schema.sql",
+ "v7_payment_links.sql",
+ "v10_1_intent_wallets.sql",
+ "v10_2_step_up.sql",
+ "v10_4_purchase_sessions.sql",
+ "v10_5_whatsapp.sql",
+ "v10_6_payment_proof.sql",
+ "v10_8_authorize.sql",
+ "v10_8_4_audit_mirror_fix.sql",
+ "v10_9_agent_trust_risk.sql",
+ "v11_0_paypal_provider.sql",
+ "v11_0_1_multi_currency.sql",
+ "v11_0_2_capture_retry.sql",
+ "v11_0_3_late_capture.sql",
+ "v11_4_post_purchase_guard.sql",
+ "v11_4_4_financial_access.sql",
+ "v11_4_5_wallet_reservations.sql",
+ "v11_4_6_verified_recipient.sql",
+ "v11_5_wallet_authority.sql"
+]

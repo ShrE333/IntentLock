@@ -42,8 +42,15 @@ import type {PaymentProviderName} from "./providers/types";
 import type {CommerceProduct} from "../commerce/types";
 import type {WalletTransaction} from "../wallets/types";
 import {revalidateAuthorizedProduct,transactionFromAuthorizationContext} from "../payments/authorization-context";
+import {getStepUpRequest} from '../wallets/stepup-repository';
+import {reserveWalletAuthority,beginProviderOperation,confirmProviderOperation,releaseUnusedReservation,releaseVerifiedDeniedCapture} from './reservations';
+import {assessAndTighten} from '../risk/tighten';
+import type {AccessContextEnv} from '../access/identity';
+import {assertExecutableCommerce,assertTrustedRecipient,recipientEnvironment} from '../payments/recipient-binding';
+import {verifyProviderRecipient} from './recipient-evidence';
+import {recordPayPalResponse} from './response-evidence';
 
-export type SessionPaymentEnv=PaymentProviderEnv & PayPalEnv & {
+export type SessionPaymentEnv=PaymentProviderEnv & PayPalEnv & AccessContextEnv & {
   PURCHASE_QUEUE?:{send(job:PayPalSettlementJob):Promise<unknown>};
   DATABASE_URL?:string;
   APPROVAL_SIGNING_SECRET?:string;
@@ -150,7 +157,20 @@ async function revalidateCommerceAndAuthority(
     throw new Error("COMMERCE_QUOTE_CHANGED_REAUTHORIZE");
   }
 
-  const evaluation=evaluateWalletTransaction(wallet,freshTx);
+  let evaluation=evaluateWalletTransaction(wallet,freshTx);
+  const tightened=await assessAndTighten(db,{
+    sessionId,walletId:wallet.walletId,agentId:'intentlock-purchase-agent',merchant:normalizedFreshProduct.merchant,
+    amount:freshTx.amount,currency:freshTx.currency,policyDecision:evaluation.decision,
+    selectedMerchantMessage:normalizedFreshProduct.merchantMessage
+  },evaluation);
+  evaluation=tightened.evaluation;
+  // Risk-driven consent is still required when monetary policy alone says ALLOW.
+  if(evaluation.decision==='ALLOW'&&session.selectedDecision==='STEP_UP'&&session.stepUpRequestId){
+    // Preserve historical RAISE_LIMIT sessions, but never infer risk consent
+    // merely because their amount falls below the current autonomous limit.
+    const request=await getStepUpRequest(db,session.stepUpRequestId);
+    if(request?.status!=='LIMIT_RAISED')evaluation={...evaluation,decision:'STEP_UP',canAutoExecute:false,requiresHumanApproval:true};
+  }
   if(evaluation.decision==="BLOCK"){
     await addEvent(db,sessionId,"PAYMENT_AUTHORITY_RECHECK_BLOCKED",{
       violations:evaluation.violations
@@ -246,6 +266,7 @@ export async function createPaymentForSession(env:SessionPaymentEnv,sessionId:st
   if(existing?.providerOrderId){
     return {duplicate:true,payment:existing,paymentLink:existing};
   }
+  if(!env.APPROVAL_SIGNING_SECRET)throw new Error('APPROVAL_SIGNING_SECRET_NOT_CONFIGURED');
 
   const session=await getSession(db,sessionId);
   if(!session) throw new Error("SESSION_NOT_FOUND");
@@ -256,6 +277,7 @@ export async function createPaymentForSession(env:SessionPaymentEnv,sessionId:st
   await mirrorSessionTraceToAudit(db,sessionId);
 
   const checked=await revalidateCommerceAndAuthority(env,sessionId,null);
+  assertExecutableCommerce(checked.session.connectorId,recipientEnvironment(env));
   const amount=checked.freshProduct.price;
   const currency=checked.freshProduct.currency.toUpperCase();
   const paymentContext={
@@ -266,6 +288,7 @@ export async function createPaymentForSession(env:SessionPaymentEnv,sessionId:st
   };
   const railSelection=selectPaymentProvider(env,paymentContext);
   const provider=railSelection.provider;
+  const expectedRecipient=provider==='paypal'?await assertTrustedRecipient(env,checked.authorizationContext?.recipient):null;
 
   await addEvent(db,sessionId,"PAYMENT_RAIL_SELECTED",{
     provider,presentmentAmount:amount,presentmentCurrency:currency,
@@ -298,7 +321,12 @@ export async function createPaymentForSession(env:SessionPaymentEnv,sessionId:st
     throw new Error("SESSION_PAYMENT_ALREADY_IN_PROGRESS");
   }
 
+  await reserveWalletAuthority(db,{
+    sessionId,walletId:checked.wallet.walletId,quoteHash:checked.quoteHash,idempotencyKey,
+    amount:checked.freshTx.amount,currency:checked.freshTx.currency,provider
+  });
   const reservation=await reserveSessionPayment(db,{
+    expectedRecipient,
     sessionId,walletId:checked.wallet.walletId,
     authorizationId:checked.session.authorizationId,
     quoteHash:checked.quoteHash,idempotencyKey,amount,currency,provider
@@ -326,8 +354,13 @@ export async function createPaymentForSession(env:SessionPaymentEnv,sessionId:st
 
     // From this point a provider-side object may exist even if the network
     // response is lost. Do not release one-time authority on ambiguous outcomes.
+    await beginProviderOperation(db,sessionId,checked.quoteHash,'CHECKOUT');
     providerCallStarted=true;
     const checkout=await createProviderCheckout(env,{
+      ...(provider==='paypal'?{onProviderResponse:async(raw:unknown)=>{
+        const pending=await getSessionPayment(db,sessionId);if(!pending)throw new Error('SESSION_PAYMENT_NOT_FOUND');await recordPayPalResponse(env,pending,'ORDER',raw);
+      }}:{}),
+      ...(expectedRecipient?{expectedRecipient}:{}),
       sessionId,walletId:checked.wallet.walletId,
       authorizationId:checked.session.authorizationId,
       quoteHash:checked.quoteHash,
@@ -341,6 +374,7 @@ export async function createPaymentForSession(env:SessionPaymentEnv,sessionId:st
     },provider);
 
     const persisted=await persistSessionPaymentCheckout(db,{
+      expectedRecipient,
       sessionId,walletId:checked.wallet.walletId,
       authorizationId:checked.session.authorizationId,
       quoteHash:checked.quoteHash,idempotencyKey,
@@ -349,6 +383,8 @@ export async function createPaymentForSession(env:SessionPaymentEnv,sessionId:st
       amount,currency,status:checkout.status,expiresAt:checkout.expiresAt
     });
 
+    if(provider==='paypal')await verifyProviderRecipient(env,persisted,'ORDER',{providerResponse:checkout.providerResponse});
+    await confirmProviderOperation(db,sessionId,'CHECKOUT',checkout.providerOrderId);
     const sessionStatus=provider==="paypal"?"PAYPAL_APPROVAL_PENDING":"PAYMENT_PENDING";
     await markSessionPaymentPending(db,{
       sessionId,provider,quoteHash:checked.quoteHash,idempotencyKey,
@@ -380,7 +416,8 @@ export async function createPaymentForSession(env:SessionPaymentEnv,sessionId:st
     return {duplicate:false,payment:persisted,paymentLink:persisted};
   }catch(error){
     await markSessionPaymentCreationFailed(db,sessionId);
-    if(consumedAuthorizationId && !providerCallStarted)
+    const releasedUnused=!providerCallStarted&&await releaseUnusedReservation(db,sessionId);
+    if(consumedAuthorizationId && releasedUnused)
       await releaseOneTimeAuthorization(db,consumedAuthorizationId,sessionId);
     await lock.release(idempotencyKey);
     throw error;
@@ -399,25 +436,35 @@ export async function authorizePayPalForSession(env:SessionPaymentEnv,sessionId:
   if(payment.providerAuthorizationId){
     return {duplicate:true,payment};
   }
+  const currentSession=await getSession(db,sessionId);
+  if(currentSession?.status!=='PAYPAL_APPROVAL_PENDING') throw new Error('SESSION_NOT_AWAITING_PAYPAL_APPROVAL');
 
   // Revalidate policy + quote immediately before placing the PayPal hold.
   const checked=await revalidateCommerceAndAuthority(env,sessionId,payment.quoteHash??undefined);
+  assertExecutableCommerce(checked.session.connectorId,recipientEnvironment(env));
+  const expectedRecipient=await assertTrustedRecipient(env,checked.authorizationContext?.recipient);
+  if(payment.expectedRecipient?.fingerprint!==expectedRecipient.fingerprint)throw new Error('PAYMENT_RECIPIENT_BINDING_MISMATCH');
+  await verifyProviderRecipient(env,payment,'PRE_AUTHORIZE');
+  await consumeExecutionAuthorityIfNeeded(db,checked);
+  await beginProviderOperation(db,sessionId,checked.quoteHash,'AUTHORIZE');
   const auth=await authorizePayPalOrder(
     env,payment.providerOrderId,
-    `${sessionId}:${payment.providerOrderId}:authorize`
+    `${sessionId}:${payment.providerOrderId}:authorize`,undefined,raw=>recordPayPalResponse(env,payment,'AUTHORIZE',raw)
   );
 
-  if(auth.amount && Math.abs(auth.amount-payment.amount)>0.0001)
+  if(!Number.isFinite(auth.amount)||auth.amount<=0||auth.amount!==payment.amount)
     throw new Error(`PAYPAL_AUTH_AMOUNT_MISMATCH:${auth.amount}:${payment.amount}`);
-  if(auth.currency && auth.currency!==payment.currency)
+  if(auth.currency!==payment.currency)
     throw new Error(`PAYPAL_AUTH_CURRENCY_MISMATCH:${auth.currency}:${payment.currency}`);
 
+  await verifyProviderRecipient(env,payment,'AUTHORIZE',{authorizationId:auth.providerAuthorizationId,providerResponse:auth.providerResponse});
   await markPayPalAuthorized(db,{
     sessionId,providerOrderId:payment.providerOrderId,
     providerAuthorizationId:auth.providerAuthorizationId,
     status:"AUTHORIZED"
   });
 
+  await confirmProviderOperation(db,sessionId,'AUTHORIZE',payment.providerOrderId,auth.providerAuthorizationId);
   await addEvent(db,sessionId,"PAYPAL_AUTHORIZED",{
     providerOrderId:payment.providerOrderId,
     providerAuthorizationId:auth.providerAuthorizationId,
@@ -432,7 +479,8 @@ export async function authorizePayPalForSession(env:SessionPaymentEnv,sessionId:
     quoteHash:checked.quoteHash
   });
 
-  return {duplicate:false,authorization:auth,payment:await getSessionPayment(db,sessionId)};
+  const {providerResponse:_response,...authorization}=auth;
+  return {duplicate:false,authorization,payment:await getSessionPayment(db,sessionId)};
 }
 
 export async function capturePayPalForSession(env:SessionPaymentEnv,sessionId:string){
@@ -447,15 +495,18 @@ export async function capturePayPalForSession(env:SessionPaymentEnv,sessionId:st
   if(session?.status==="CAPTURED") return {duplicate:true,payment};
   if(payment.providerCaptureId && session?.status==="CAPTURE_PENDING")
     return {duplicate:true,payment};
+  if(!env.APPROVAL_SIGNING_SECRET)throw new Error('APPROVAL_SIGNING_SECRET_NOT_CONFIGURED');
+  if(!session||!['AUTHORIZED','CAPTURE_PENDING'].includes(session.status))throw new Error('SESSION_NOT_AUTHORIZED_FOR_CAPTURE');
 
   // Final deterministic revalidation happens AFTER PayPal authorization and
   // immediately BEFORE capture.
   const checked=await revalidateCommerceAndAuthority(env,sessionId,payment.quoteHash??undefined);
-  let consumedAuthorizationId:string|null=null;
-  let captureCallStarted=false;
-
-  try{
-    consumedAuthorizationId=await consumeExecutionAuthorityIfNeeded(db,checked);
+  assertExecutableCommerce(checked.session.connectorId,recipientEnvironment(env));
+  const expectedRecipient=await assertTrustedRecipient(env,checked.authorizationContext?.recipient);
+  if(payment.expectedRecipient?.fingerprint!==expectedRecipient.fingerprint)throw new Error('PAYMENT_RECIPIENT_BINDING_MISMATCH');
+  await verifyProviderRecipient(env,payment,'PRE_CAPTURE');
+  {
+    await consumeExecutionAuthorityIfNeeded(db,checked);
 
     // Once the capture request starts, its outcome can be ambiguous on a
     // transport failure. Keep one-time authority consumed rather than risk reuse.
@@ -465,21 +516,22 @@ export async function capturePayPalForSession(env:SessionPaymentEnv,sessionId:st
       providerAuthorizationId:payment.providerAuthorizationId,
       amount:payment.amount,currency:payment.currency
     });
-    captureCallStarted=true;
+    await beginProviderOperation(db,sessionId,checked.quoteHash,'CAPTURE');
     const capture=await capturePayPalAuthorization(
       env,payment.providerAuthorizationId,payment.providerOrderId,
-      `${sessionId}:${payment.providerAuthorizationId}:capture`
+      `${sessionId}:${payment.providerAuthorizationId}:capture`,undefined,raw=>recordPayPalResponse(env,payment,'CAPTURE',raw),{amount:payment.amount,currency:payment.currency}
     );
 
-    if(capture.amount && Math.abs(capture.amount-payment.amount)>0.0001)
+    if(!Number.isFinite(capture.amount)||capture.amount<=0||capture.amount!==payment.amount)
       throw new Error(`PAYPAL_CAPTURE_AMOUNT_MISMATCH:${capture.amount}:${payment.amount}`);
-    if(capture.currency && capture.currency!==payment.currency)
+    if(capture.currency!==payment.currency)
       throw new Error(`PAYPAL_CAPTURE_CURRENCY_MISMATCH:${capture.currency}:${payment.currency}`);
 
     await markPayPalCaptureRequested(db,{
       sessionId,providerCaptureId:capture.providerCaptureId,status:"CAPTURE_REQUESTED"
     });
-
+    await verifyProviderRecipient(env,payment,'CAPTURE',{captureId:capture.providerCaptureId,providerResponse:capture.providerResponse});
+    await confirmProviderOperation(db,sessionId,'CAPTURE',payment.providerOrderId,payment.providerAuthorizationId,capture.providerCaptureId);
     await addEvent(db,sessionId,"PAYPAL_CAPTURE_REQUESTED",{
       providerAuthorizationId:payment.providerAuthorizationId,
       providerCaptureId:capture.providerCaptureId,
@@ -496,11 +548,8 @@ export async function capturePayPalForSession(env:SessionPaymentEnv,sessionId:st
       trustedCapturedState:false
     });
 
-    return {duplicate:false,capture,payment:await getSessionPayment(db,sessionId)};
-  }catch(error){
-    if(consumedAuthorizationId && !captureCallStarted)
-      await releaseOneTimeAuthorization(db,consumedAuthorizationId,sessionId);
-    throw error;
+    const {providerResponse:_response,...publicCapture}=capture;
+    return {duplicate:false,capture:publicCapture,payment:await getSessionPayment(db,sessionId)};
   }
 }
 
@@ -514,6 +563,7 @@ async function finishVerifiedCapture(
     amount:number;
     currency:string;
     verifiedPayPalPayloadHash?:string;
+    verifiedWebhookPayloadHash?:string;
   },
   stage?:(name:string,data?:Record<string,unknown>)=>void
 ){
@@ -541,7 +591,8 @@ async function finishVerifiedCapture(
     amount:walletSpendAmount,currency:walletSpendCurrency,
     provider:input.provider,providerLinkId:input.providerOrderId,
     providerPaymentId:input.providerPaymentId,
-    ...(input.verifiedPayPalPayloadHash?{verifiedPayPalPayloadHash:input.verifiedPayPalPayloadHash}:{})
+    ...(input.verifiedPayPalPayloadHash?{verifiedPayPalPayloadHash:input.verifiedPayPalPayloadHash}:{}),
+    ...(input.verifiedWebhookPayloadHash?{verifiedWebhookPayloadHash:input.verifiedWebhookPayloadHash}:{})
   });
 
   stage?.("PAYPAL_WALLET_SETTLEMENT",{status:"completed",applied:spend.applied,ledgerId:spend.ledgerId});
@@ -653,6 +704,13 @@ async function settleVerifiedPayPalCapture(
     const session=await getSession(db,payment.sessionId);
     if(!session) throw new Error("SESSION_NOT_FOUND");
     const receipt=await getProofReceipt(db,payment.sessionId);
+    if(payment.expectedRecipient){
+      const saved=await getVerifiedPayPalWebhook(db,payloadHash);
+      if(!saved?.payload)throw new Error('VERIFIED_PAYPAL_WEBHOOK_NOT_FOUND');
+      await verifyProviderRecipient(env,payment,'SETTLEMENT',{payloadHash,webhook:saved.payload,captureId:ids.captureId});
+    }else if(session.status!=='CAPTURED'||!receipt){
+      throw new Error('LEGACY_RECIPIENT_RECONCILIATION_REQUIRED');
+    }
     // Receipt existence alone is insufficient: its session attachment may have failed.
     if(session.status==="CAPTURED" && payment.status==="COMPLETED" &&
        receipt && session.proofReceiptId===receipt.receiptId){
@@ -723,15 +781,15 @@ export async function processSessionPayPalWebhook(env:SessionPaymentEnv,request:
     found:Boolean(payment),sessionId:payment?.sessionId??null,provider:payment?.provider??null,
     providerOrderId:payment?.providerOrderId??null,providerCaptureId:payment?.providerCaptureId??null
   });
-  if(!payment || payment.provider!=="paypal")
+  if(!payment || payment.provider!=="paypal"){
+    // Signature verification authorizes preserving evidence, not assigning an
+    // unknown event to a browser-selected wallet or session.
+    await claimSessionWebhook(db,{payloadHash:await hashWebhook(rawBody),eventType:ids.eventType,provider:'paypal',providerLinkId:ids.orderId,providerPaymentId:ids.captureId,sessionId:null,payload:verified.event});
     return json({received:true,ignored:true,reason:"PAYPAL_SESSION_NOT_FOUND"});
+  }
 
   const log=paypalProcessingLog(env,{sessionId:payment.sessionId,eventId:ids.eventId});
   try{
-    if(ids.eventType==="PAYMENT.CAPTURE.COMPLETED"){
-      validatePayPalCapture(ids,payment);
-      log.stage("PAYPAL_CAPTURE_VALIDATED");
-    }
     log.stage("PAYPAL_WEBHOOK_HASH");
     const payloadHash=await hashWebhook(rawBody);
     log.stage("PAYPAL_WEBHOOK_CLAIM",{status:"started",payloadHash});
@@ -741,6 +799,7 @@ export async function processSessionPayPalWebhook(env:SessionPaymentEnv,request:
       providerPaymentId:ids.captureId,sessionId:payment.sessionId,payload:verified.event
     });
     log.stage("PAYPAL_WEBHOOK_CLAIM",{claimed,payloadHash});
+    if(ids.eventType==='PAYMENT.CAPTURE.COMPLETED'||ids.eventType==='PAYMENT.CAPTURE.DENIED')validatePayPalCapture(ids,payment);
 
     if(ids.eventType==="PAYMENT.CAPTURE.COMPLETED"){
       // Claim means received, never settled. Retry incomplete settlement even when claimed=false.
@@ -753,6 +812,13 @@ export async function processSessionPayPalWebhook(env:SessionPaymentEnv,request:
       // Local/test fallback retains the same replay-safe settlement path.
       return json({received:true,...await settleVerifiedPayPalCapture(env,payloadHash,ids,payment)});
     }
+    if(ids.eventType==='PAYMENT.CAPTURE.DENIED'){
+      if(payment.status!=='COMPLETED'){
+        if(payment.expectedRecipient)await verifyProviderRecipient(env,payment,'CAPTURE',{captureId:ids.captureId,payloadHash,webhook:verified.event});
+        await releaseVerifiedDeniedCapture(db,payment.sessionId,payloadHash);
+      }
+      await markSessionPaymentFailed(db,payment.sessionId,'DENIED',true);
+    }
     if(!claimed) return json({received:true,duplicate:true,sessionId:payment.sessionId});
     await addEvent(db,payment.sessionId,"PAYPAL_WEBHOOK_VERIFIED",{
       eventType:ids.eventType,eventId:ids.eventId,
@@ -763,9 +829,6 @@ export async function processSessionPayPalWebhook(env:SessionPaymentEnv,request:
       providerOrderId:ids.orderId??payment.providerOrderId,providerCaptureId:ids.captureId
     });
     log.stage("PAYPAL_WEBHOOK_EVENT_AUDITED");
-    if(ids.eventType==="PAYMENT.CAPTURE.DENIED"){
-      await markSessionPaymentFailed(db,payment.sessionId,"DENIED",true);
-    }
     return json({received:true,processed:true,eventType:ids.eventType,sessionId:payment.sessionId});
   }catch(error){log.error(error);throw error;}
 }
@@ -809,18 +872,18 @@ export async function processSessionRazorpayWebhook(env:SessionPaymentEnv,reques
     sessionId:session.sessionId,payload
   });
 
-  if(!claimed){
+  if(!claimed&&eventType!=='payment_link.paid'){
     return new Response(JSON.stringify({received:true,duplicate:true,sessionId:session.sessionId}),{
       status:200,headers:{"content-type":"application/json"}
     });
   }
 
-  await addEvent(db,session.sessionId,"RAZORPAY_WEBHOOK_VERIFIED",{
+  if(claimed){await addEvent(db,session.sessionId,"RAZORPAY_WEBHOOK_VERIFIED",{
     eventType,providerOrderId,providerPaymentId
   });
   await appendSessionAuditEvent(db,session.sessionId,"RAZORPAY_WEBHOOK_VERIFIED",{
     eventType,providerOrderId,providerPaymentId,payloadHash
-  });
+  });}
 
   if(eventType!=="payment_link.paid"){
     return new Response(JSON.stringify({received:true,processed:true,eventType,sessionId:session.sessionId}),{
@@ -841,7 +904,7 @@ export async function processSessionRazorpayWebhook(env:SessionPaymentEnv,reques
     provider:"razorpay",sessionId:session.sessionId,
     providerOrderId:payment.providerOrderId,
     providerPaymentId:providerPaymentId?String(providerPaymentId):null,
-    amount,currency:payment.currency
+    amount,currency:payment.currency,verifiedWebhookPayloadHash:payloadHash
   });
 
   return new Response(JSON.stringify({

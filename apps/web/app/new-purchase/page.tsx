@@ -3,6 +3,8 @@
 import {useEffect,useMemo,useRef,useState} from "react";
 import {Shell} from "../components/Shell";
 import {getJson,postJson} from "../lib";
+import {refreshWithError} from '../runtime-config';
+import {sandboxWalletAvailable} from '../demo-evidence';
 
 type FxQuote={
   quoteId:string;fromCurrency:string;toCurrency:string;rate:number;fromAmount:number;toAmount:number;
@@ -14,7 +16,7 @@ type PaymentAuthorizationContext={
   fxQuote:FxQuote|null;createdAt:string;
 };
 type Wallet={
-  walletId:string;name:string;countryCode:string;currency:string;totalAuthority:number;spentAmount:number;
+  walletId:string;name:string;countryCode:string;currency:string;totalAuthority:number;spentAmount:number;reservedAmount?:number;
   autoBuyLimit:number;maxSingleTransaction:number;allowedCategories:string[];allowedBrands:string[];
   blockedBrands:string[];requiredFeatures:string[];validUntil:string;status:"ACTIVE"|"REVOKED";
 };
@@ -52,7 +54,7 @@ const money=(n:number,currency:string)=>new Intl.NumberFormat("en-US",{
 }).format(n);
 
 function walletReadiness(wallet:Wallet){
-  const remaining=Math.max(0,wallet.totalAuthority-wallet.spentAmount);
+  const remaining=sandboxWalletAvailable(wallet);
   const expiresMs=new Date(wallet.validUntil).getTime();
   const msLeft=expiresMs-Date.now();
   if(wallet.status!=="ACTIVE") return {ready:false,label:"REVOKED",message:"This wallet is revoked.",remaining,msLeft};
@@ -78,7 +80,7 @@ function statusHelp(status:string){
     PAYMENT_PENDING:"Checkout exists on the selected payment rail and is waiting for provider completion.",
     AUTHORIZED:"PayPal approved the order and placed an authorization hold. Capture has not completed yet.",
     CAPTURE_PENDING:"Capture was requested. IntentLock is waiting for verified provider evidence before settling the wallet.",
-    CAPTURED:"Provider evidence, wallet ledger and session state agree. The purchase is complete.",
+    CAPTURED:"Capture is recorded. Inspect the signed receipt and wallet ledger to verify the transaction.",
     FAILED:"Execution failed before trusted capture. Inspect the trace for the exact stage.",
     CANCELLED:"Checkout was cancelled before capture.",
     REJECTED:"A required human step-up was rejected."
@@ -114,6 +116,7 @@ export default function AutonomousPurchasePage(){
   const [stepResult,setStepResult]=useState<any>(null);
   const [payment,setPayment]=useState<Payment|null>(null);
   const [paymentBusy,setPaymentBusy]=useState(false);
+  const [proofVerified,setProofVerified]=useState(false);
   const returnHandled=useRef(false);
 
   const wallet=useMemo(()=>wallets.find(w=>w.walletId===walletId)??null,[wallets,walletId]);
@@ -127,7 +130,7 @@ export default function AutonomousPurchasePage(){
         getJson<{wallets:Wallet[]}>("/api/wallets"),
         getJson<{connectors:Connector[]}>("/api/commerce/connectors")
       ]);
-      const enabled=c.connectors.filter(x=>x.enabled);
+      const enabled=c.connectors.filter(x=>x.enabled&&x.id==='paypal-demo-marketplace');
       setWallets(w.wallets);setConnectors(enabled);
       if(!walletId){
         const firstReady=w.wallets.find(x=>walletReadiness(x).ready);
@@ -148,6 +151,11 @@ export default function AutonomousPurchasePage(){
   async function refreshSessionById(id:string){
     const r=await getJson<{session:Session;events:Event[]}>(`/api/sessions/${encodeURIComponent(id)}`);
     setSession(r.session);setEvents(r.events);
+    setProofVerified(false);
+    if(r.session.status==='CAPTURED'){
+      try{const proof=await getJson<{verification:{verified:boolean}}>(`/api/sessions/${encodeURIComponent(id)}/proof`);setProofVerified(proof.verification.verified===true);}
+      catch{setProofVerified(false);}
+    }
     try{
       const p=await getJson<{payment:Payment|null}>(`/api/sessions/${encodeURIComponent(id)}/payment`);
       setPayment(p.payment);
@@ -155,7 +163,7 @@ export default function AutonomousPurchasePage(){
     if(r.session.status==="CAPTURED") await load();
     return r.session;
   }
-  async function refreshSession(){if(session) await refreshSessionById(session.sessionId);}
+  async function refreshSession(){if(!session)return;await refreshWithError(()=>refreshSessionById(session.sessionId),e=>setError(e instanceof Error?e.message:String(e)));}
 
   // PayPal returns here after buyer approval. The browser cannot mark a purchase
   // captured; it only asks the backend to authorize and request capture.
@@ -271,7 +279,7 @@ export default function AutonomousPurchasePage(){
 
   return <Shell><div className="page">
     <header className="pageHeader"><div>
-      <div className="eyebrow">INTENTLOCK V11.3 · TRANSACTION RELIABILITY</div>
+      <div className="eyebrow">LIVE PURCHASE · DETERMINISTIC POLICY</div>
       <h1>Autonomous Purchase</h1>
       <p>Discovery finds candidates. Wallet policy evaluates them independently. Payment then moves through an explicit provider state machine until verified settlement.</p>
     </div>{session&&<span className="sessionIdBadge">{session.sessionId}</span>}</header>
@@ -357,7 +365,7 @@ export default function AutonomousPurchasePage(){
 
       {session.status==="PAYMENT_PENDING"&&<article className="paymentPendingCard"><div><span className="miniLabel">PAYMENT EXECUTION</span><h2>WAITING FOR VERIFIED WEBHOOK</h2><p>The selected alternate rail remains webhook-gated.</p></div>{payment?.checkoutUrl&&<a className="button buttonPrimary" href={payment.checkoutUrl} target="_blank" rel="noreferrer">Open Checkout</a>}</article>}
 
-      {session.status==="CAPTURED"&&<article className="capturedProofCard"><div><span className="miniLabel">VERIFIED PURCHASE</span><h2>PAYMENT CAPTURED</h2><p>Verified webhook · wallet authority debited once in its own currency · proof receipt generated.</p></div><div className="capturedActions"><strong>{money(Number(session.capturedAmount??session.selectedProduct.price),session.capturedCurrency??session.selectedProduct.currency)}</strong><a className="button buttonPrimary" href={`/proof/${encodeURIComponent(session.sessionId)}`}>View Proof Receipt</a><a className="button buttonSecondary" href={`/trust-center?sessionId=${encodeURIComponent(session.sessionId)}`}>Open Transaction Control</a></div></article>}
+      {session.status==="CAPTURED"&&<article className="capturedProofCard"><div><span className="miniLabel">{proofVerified?"VERIFIED PAYMENT":"CAPTURE RECORDED - PROOF NOT VERIFIED"}</span><h2>PAYMENT CAPTURED</h2><p>{proofVerified?"Provider evidence, wallet ledger and signed proof verified.":"Capture is recorded. Open the proof receipt to inspect its verification result."}</p></div><div className="capturedActions"><strong>{money(Number(session.capturedAmount??session.selectedProduct.price),session.capturedCurrency??session.selectedProduct.currency)}</strong><a className="button buttonPrimary" href={`/proof/${encodeURIComponent(session.sessionId)}`}>View Proof Receipt</a><a className="button buttonSecondary" href={`/trust-center?sessionId=${encodeURIComponent(session.sessionId)}`}>Open Transaction Control</a></div></article>}
     </section>}
   </div></Shell>;
 }

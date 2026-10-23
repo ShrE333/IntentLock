@@ -34,12 +34,13 @@ describe("late verified PayPal capture reconciliation (isolated PostgreSQL)",()=
     `);
     await db.exec(readFileSync(new URL("../../db/v11_0_2_capture_retry.sql",import.meta.url),"utf8"));
     await db.exec(migration);
+    await db.exec(readFileSync(new URL('../../db/v11_4_5_wallet_reservations.sql',import.meta.url),'utf8'));
   },30000);
   afterAll(async()=>{await db?.close();});
   beforeEach(async()=>{
     await db.exec(`
       TRUNCATE intent_wallets,wallet_spend_ledger,session_payment_links,purchase_sessions,
-        session_payment_webhook_events,purchase_session_events;
+        session_payment_webhook_events,purchase_session_events CASCADE;
       INSERT INTO intent_wallets(wallet_id,status,currency,total_authority,valid_until)
         VALUES('iw_1','ACTIVE','INR',10000,NOW()-INTERVAL '1 day');
       INSERT INTO session_payment_links VALUES('ps_1','iw_1','paypal','ORDER-1','AUTH-1','CAP-1',49,'USD','quote','once',NOW()-INTERVAL '3 days');

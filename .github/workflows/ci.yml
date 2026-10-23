@@ -12,6 +12,20 @@ jobs:
   verify:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: intentlock_test
+          POSTGRES_PASSWORD: isolated-local-test
+          POSTGRES_DB: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U intentlock_test -d postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
 
     steps:
       - name: Checkout
@@ -29,8 +43,34 @@ jobs:
       - name: Worker tests
         run: npm test
 
+      - name: Repeat Worker tests
+        run: npm test
+
+      - name: Strict Worker TypeScript
+        run: npm --workspace apps/worker exec -- tsc --noEmit --strict
+
+      - name: Disposable full migration and separate-connection contention checks
+        run: node apps/worker/scripts/validate-release-postgres.mjs 5432
+
+      - name: PostgreSQL ownership, reservation and recipient regressions
+        env:
+          INTENTLOCK_TEST_POSTGRES_PORT: '5432'
+        run: npm --workspace apps/worker exec -- vitest run src/tests/financial-access-sql.test.ts src/tests/wallet-reservations-sql.test.ts src/tests/recipient-settlement-sql.test.ts src/tests/release-http-integration.test.ts
+
+      - name: Install isolated browser test engine
+        run: npm --workspace apps/web exec -- playwright install --with-deps chromium
+
+      - name: Desktop and mobile sandbox browser regressions
+        run: npm --workspace apps/web run test:browser
+
       - name: Next.js production build
+        env:
+          # Build validation only; deployment must supply its real HTTPS Worker URL.
+          NEXT_PUBLIC_INTENTLOCK_API_URL: https://intentlock-api.invalid
         run: npm --workspace apps/web run build
+
+      - name: Strict frontend TypeScript
+        run: npm --workspace apps/web exec -- tsc --noEmit --strict
 
       - name: Cloudflare Worker dry-run
         working-directory: apps/worker

@@ -3,8 +3,9 @@ import {assertPayeeIdentityStable,buildPayeeLockBinding,type PayeeLockEnv} from 
 import type {IntentWallet,WalletTransaction} from "../wallets/types";
 import type {PaymentAuthorizationContext} from "./context-types";
 import {assertFxQuoteUsable,createFxQuote,revalidateFxDrift,type FxEnv} from "./fx";
+import {resolveRecipient,assertTrustedRecipient,type RecipientEnv} from './recipient-binding';
 
-export type AuthorizationContextEnv=FxEnv & PayeeLockEnv & {
+export type AuthorizationContextEnv=FxEnv & PayeeLockEnv & RecipientEnv & {
   COMMERCE_MERCHANT_COUNTRY?:string;
 };
 
@@ -35,14 +36,16 @@ export function transactionFromAuthorizationContext(
     fxQuotedAt:context.fxQuote?.quotedAt,
     fxExpiresAt:context.fxQuote?.expiresAt,
     payeeProvider:context.payeeLock?.provider,
-    payeeFingerprint:context.payeeLock?.fingerprint
+    payeeFingerprint:context.payeeLock?.fingerprint,
+    recipientFingerprint:context.recipient?.fingerprint
   };
 }
 
 export async function authorizeProductContext(
   env:AuthorizationContextEnv,
   wallet:IntentWallet,
-  product:CommerceProduct
+  product:CommerceProduct,
+  connectorId?:string
 ){
   const presentmentCurrency=product.currency.trim().toUpperCase();
   const walletCurrency=wallet.currency.trim().toUpperCase();
@@ -50,6 +53,7 @@ export async function authorizeProductContext(
   const merchantCountry=country(product.merchantCountry??env.COMMERCE_MERCHANT_COUNTRY,"ZZ");
   const productWithCountry={...product,merchantCountry};
   const payeeLock=await buildPayeeLockBinding(env,productWithCountry);
+  const recipient=connectorId?await resolveRecipient(env,connectorId,productWithCountry):null;
   const context:PaymentAuthorizationContext={
     version:"intentlock-payment-context-v1",
     buyerCountry:country(wallet.countryCode,"IN"),
@@ -60,7 +64,7 @@ export async function authorizeProductContext(
     presentmentCurrency,
     fxQuote,
     createdAt:new Date().toISOString(),
-    payeeLock
+    payeeLock,...(recipient?{recipient}:{})
   };
   const enriched:CommerceProduct={...productWithCountry,authorizationContext:context};
   return {product:enriched,context,transaction:transactionFromAuthorizationContext(enriched,context)};
@@ -89,6 +93,11 @@ export async function revalidateAuthorizedProduct(
 
   const freshWithCountry={...freshProduct,merchantCountry};
   await assertPayeeIdentityStable(env,context.payeeLock,freshWithCountry);
+  if(context.recipient){
+    const current=await assertTrustedRecipient(env,context.recipient);
+    if(freshWithCountry.source?.provider!==current.catalogProvider||freshWithCountry.source?.payeeId!==current.catalogSellerId)
+      throw new Error('RECIPIENT_CATALOG_IDENTITY_CHANGED');
+  }
 
   assertFxQuoteUsable(context.fxQuote);
   const fxDrift=await revalidateFxDrift(env,context.fxQuote);

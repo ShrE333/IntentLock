@@ -108,7 +108,7 @@ export async function handleAuthorizeRoutes(
     const name=String(body?.name??"").trim();
     if(!name) return json({error:"MISSING_NAME"},400);
 
-    const allowedScopes=new Set(["authorize","verify"]);
+    const allowedScopes=new Set(['authorize','verify','financial:read','wallet:create','wallet:evaluate','session:create','session:run','stepup:resolve','payment:execute','commerce:search','intent:create','legacy:evaluate','refund:evaluate']);
     const scopes=Array.isArray(body?.scopes)
       ? body.scopes.map(String).filter((x:string)=>allowedScopes.has(x))
       : ["authorize","verify"];
@@ -159,7 +159,7 @@ export async function handleAuthorizeRoutes(
 
   if(url.pathname==="/v1/authorize" && request.method==="POST"){
     const auth=await requireClient(request,env,"authorize");
-    if("response" in auth) return auth.response;
+    if(auth.response) return auth.response;
 
     let body:unknown;
     try{ body=await request.json(); }
@@ -194,7 +194,7 @@ export async function handleAuthorizeRoutes(
 
   if(url.pathname==="/v1/verify" && request.method==="POST"){
     const auth=await requireClient(request,env,"verify");
-    if("response" in auth) return auth.response;
+    if(auth.response) return auth.response;
 
     let body:any;
     try{ body=await request.json(); }

@@ -1,6 +1,8 @@
 import {createWallet,listWallets,getWallet,recordDecision} from "./repository";
 import {evaluateWalletTransaction} from "./policy";
 import {issueStepUpRequest,resolveStepUpRequest} from "./stepup";
+import {WalletCreateSchema,WalletTransactionSchema} from './validation';
+import {identityOf,listPrincipal} from '../access/identity';
 
 const headers={
   "content-type":"application/json; charset=utf-8",
@@ -21,12 +23,12 @@ export async function handleWalletRoutes(request:Request,env:WalletEnv,url:URL):
 
   try{
     if(request.method==="GET" && url.pathname==="/api/wallets"){
-      const wallets=await listWallets(env.DATABASE_URL);
+      const wallets=await listWallets(env.DATABASE_URL,listPrincipal(env));
       return json({wallets,count:wallets.length});
     }
 
     if(request.method==="POST" && url.pathname==="/api/wallets"){
-      const b:any=await request.json();
+      const b=WalletCreateSchema.parse(await request.json());
       const totalAuthority=Number(b.totalAuthority);
       const autoBuyLimit=Number(b.autoBuyLimit);
       const maxSingleTransaction=Number(b.maxSingleTransaction);
@@ -46,7 +48,7 @@ export async function handleWalletRoutes(request:Request,env:WalletEnv,url:URL):
         allowedCategories:list(b.allowedCategories),allowedBrands:list(b.allowedBrands),
         blockedBrands:list(b.blockedBrands),requiredFeatures:list(b.requiredFeatures),
         validUntil:new Date(b.validUntil).toISOString()
-      });
+      },identityOf(env)?.kind==='ops'?undefined:identityOf(env)?.principalId);
       return json({ok:true,wallet},201);
     }
 
@@ -56,12 +58,12 @@ export async function handleWalletRoutes(request:Request,env:WalletEnv,url:URL):
       const wallet=await getWallet(env.DATABASE_URL,walletId);
       if(!wallet) return json({error:"WALLET_NOT_FOUND"},404);
       const b:any=await request.json();
-      const tx={
+      const tx=WalletTransactionSchema.parse({
         productName:b.productName?String(b.productName):undefined,
-        category:String(b.category??""),brand:String(b.brand??""),amount:Number(b.amount),
-        currency:String(b.currency??wallet.currency).toUpperCase(),quantity:Number(b.quantity??1),
+        category:b.category,brand:b.brand,amount:b.amount,
+        currency:b.currency??wallet.currency,quantity:b.quantity??1,
         features:list(b.features)
-      };
+      });
       const evaluation=evaluateWalletTransaction(wallet,tx);
       const decisionId=await recordDecision(env.DATABASE_URL,walletId,tx,evaluation);
       const stepUp=evaluation.decision==="STEP_UP"

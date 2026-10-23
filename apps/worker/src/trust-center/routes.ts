@@ -1,4 +1,5 @@
 import {neon} from "@neondatabase/serverless";
+import {identityOf,listPrincipal} from '../access/identity';
 import {listSessions,getSession,getEvents} from "../sessions/repository";
 import {getWallet} from "../wallets/repository";
 import {
@@ -9,6 +10,7 @@ import {
 import {getVerifiedProofReceipt} from "../session-payments/proof";
 import {finalizePayPalCaptureJob,type SessionPaymentEnv} from "../session-payments/service";
 import {getPayPalCaptureDetails} from "../session-payments/providers/paypal";
+import {reconcileWalletReservation} from '../session-payments/reservations';
 import {publicPayeeLockConfig,type PayeeLockEnv} from "../commerce/payee-lock";
 import {sha256Hex} from "../wallets/crypto";
 import type {PurchaseSession} from "../sessions/types";
@@ -127,7 +129,7 @@ async function inspectSession(env:TrustCenterEnv,session:PurchaseSession,deep=fa
 }
 
 async function reconciliationScan(env:TrustCenterEnv,deep=false){
-  const sessions=await listSessions(String(env.DATABASE_URL));
+  const sessions=await listSessions(String(env.DATABASE_URL),listPrincipal(env));
   const findings:ReconciliationFinding[]=[];
   for(let i=0;i<sessions.length;i++){
     // Provider reads are deliberately bounded so the dashboard cannot fan out into
@@ -180,7 +182,7 @@ export async function buildDisputeEvidence(env:TrustCenterEnv,sessionId:string,r
     getEvents(db,sessionId),
     getSessionPayment(db,sessionId),
     getWalletLedgerForSession(db,sessionId),
-    getVerifiedProofReceipt(db,sessionId),
+    getVerifiedProofReceipt(db,sessionId,env.APPROVAL_SIGNING_SECRET),
     (async()=>{const s=await getSession(db,sessionId);return s?getWallet(db,s.walletId):null;})()
   ]);
   if(!session) throw new Error("SESSION_NOT_FOUND");
@@ -197,7 +199,7 @@ export async function buildDisputeEvidence(env:TrustCenterEnv,sessionId:string,r
     requirement("Provider capture identity",Boolean(payment?.providerCaptureId),payment?.providerCaptureId??null),
     requirement("Verified webhook evidence",eventTypes.has("PAYPAL_WEBHOOK_VERIFIED")||eventTypes.has("RAZORPAY_WEBHOOK_VERIFIED"),null),
     requirement("Replay-safe wallet ledger",Boolean(ledger),ledger?String((ledger as any).ledger_id):null),
-    requirement("Cryptographic proof receipt",Boolean(verifiedProof?.receipt?.proofSignature),verifiedProof?.receipt?.receiptId??null),
+    requirement("Cryptographic proof receipt",Boolean(verifiedProof?.verification.verified),verifiedProof?.receipt?.receiptId??null),
     requirement("Valid audit chain",Boolean(verifiedProof?.verification.auditChainValid),verifiedProof?.verification.currentAuditHeadHash??null)
   ];
 
@@ -284,7 +286,7 @@ export async function handleTrustCenterRoutes(
   try{
     if(request.method==="GET"&&url.pathname==="/api/trust-center/overview"){
       const scan=await reconciliationScan(env,false);
-      const sessions=await listSessions(env.DATABASE_URL);
+      const sessions=await listSessions(env.DATABASE_URL,listPrincipal(env));
       const recentPayees=sessions
         .map(s=>s.selectedProduct?.authorizationContext?.payeeLock)
         .filter(Boolean)
@@ -294,7 +296,7 @@ export async function handleTrustCenterRoutes(
         product:"IntentLock TrustOps",
         features:{disputeDefense:true,reconciliationWatchdog:true,payeeLock:true,refundFirewall:true,paypalDisputes:true},
         reconciliation:scan.counts,
-        payeeLock:publicPayeeLockConfig(env),
+        payeeLock:identityOf(env)?.kind==='ops'?publicPayeeLockConfig(env):{mode:publicPayeeLockConfig(env).mode,configured:publicPayeeLockConfig(env).configured,trustedPayeeCount:publicPayeeLockConfig(env).trustedPayeeCount,trustedPayees:[]},
         recentPayees,
         latestCapturedSessionId:sessions.find(s=>s.status==="CAPTURED")?.sessionId??null
       });
@@ -315,11 +317,18 @@ export async function handleTrustCenterRoutes(
       const session=await getSession(env.DATABASE_URL,sessionId);
       if(!session) return json({error:"SESSION_NOT_FOUND"},404);
       const payment=await getSessionPayment(env.DATABASE_URL,sessionId);
-      if(!payment) return json({error:"SESSION_PAYMENT_NOT_FOUND"},404);
+      if(!payment){
+        const reservation=await reconcileWalletReservation({...env,DATABASE_URL:env.DATABASE_URL},sessionId);
+        return json({ok:reservation.released,reservation,verifiedCapture:false},reservation.released?200:409);
+      }
       if(payment.provider!=="paypal")
         return json({error:"AUTO_RECONCILIATION_REQUIRES_PAYPAL_VERIFIED_EVIDENCE"},409);
       const evidence=await latestVerifiedPayPalEvidence(env.DATABASE_URL,sessionId);
-      if(!evidence) return json({error:"VERIFIED_CAPTURE_EVIDENCE_NOT_FOUND"},409);
+      if(!evidence){
+        const reservation=await reconcileWalletReservation({...env,DATABASE_URL:env.DATABASE_URL},sessionId);
+        const ok=reservation.released||reservation.recoveredAuthorization||reservation.recoveredCheckout;
+        return json({ok:Boolean(ok),reservation,verifiedCapture:false},ok?200:409);
+      }
 
       const result=await finalizePayPalCaptureJob(env,{
         kind:"FINALIZE_PAYPAL_CAPTURE",payloadHash:evidence.payloadHash
@@ -345,7 +354,7 @@ export async function handleTrustCenterRoutes(
       const sessionId=decodeURIComponent(refundEvaluate[1]);
       const b:any=await request.json();
       return json(await evaluateSessionRefund(env,sessionId,{
-        amount:Number(b.amount),currency:b.currency?String(b.currency):undefined,reason:b.reason?String(b.reason):undefined
+        amount:b.amount,currency:b.currency?String(b.currency):undefined,reason:b.reason?String(b.reason):undefined
       }));
     }
 
@@ -355,7 +364,7 @@ export async function handleTrustCenterRoutes(
       const sessionId=decodeURIComponent(refundRequest[1]);
       const b:any=await request.json();
       return json(await requestSessionRefund(env,sessionId,{
-        amount:Number(b.amount),currency:b.currency?String(b.currency):undefined,reason:b.reason?String(b.reason):undefined
+        amount:b.amount,currency:b.currency?String(b.currency):undefined,reason:b.reason?String(b.reason):undefined
       }));
     }
 

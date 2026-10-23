@@ -57,7 +57,7 @@ export function canonicalJson(value: unknown): string {
   return JSON.stringify(canonicalizeValue(value));
 }
 
-function encodeText(value: string): Uint8Array {
+function encodeText(value: string): Uint8Array<ArrayBuffer> {
   return new TextEncoder().encode(value);
 }
 

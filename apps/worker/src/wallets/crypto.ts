@@ -53,6 +53,7 @@ export function canonicalWalletTransaction(tx: WalletTransaction) {
     core.payeeFingerprint=tx.payeeFingerprint??null;
   }
 
+  if(tx.recipientFingerprint!==undefined)core.recipientFingerprint=tx.recipientFingerprint;
   return JSON.stringify(core);
 }
 

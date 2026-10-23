@@ -16,10 +16,13 @@ export class PayPalDemoMarketplaceConnector implements CommerceConnector{
 
   async search(query:CommerceSearchQuery):Promise<CommerceProduct[]>{
     const words=norm(query.query).split(/\s+/).filter(Boolean);
+    const requestedBrands=['sony','bose','boat'].filter(brand=>words.includes(brand));
     const required=(query.requiredFeatures??[]).map(norm);
     const brands=(query.brands??[]).map(norm);
 
     return paypalDemoCatalog
+      .filter(product=>!requestedBrands.length||requestedBrands.includes(norm(product.brand)))
+      .filter(product=>!norm(query.query).includes('wh-ch720n')||norm(product.title).includes('wh-ch720n'))
       .map(product=>{
         let score=0;
         const features=product.features.map(norm);

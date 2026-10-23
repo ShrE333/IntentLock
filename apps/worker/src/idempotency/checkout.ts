@@ -5,7 +5,7 @@ import type {
 } from "../types/contracts";
 import { computeQuoteHash } from "../security/approval";
 
-function encodeText(value: string): Uint8Array {
+function encodeText(value: string): Uint8Array<ArrayBuffer> {
   return new TextEncoder().encode(value);
 }
 

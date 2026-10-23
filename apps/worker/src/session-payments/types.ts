@@ -1,6 +1,7 @@
 import type {PaymentProviderName} from "./providers/types";
 
 export type SessionPaymentRecord = {
+  expectedRecipient?:import('../payments/recipient-binding').RecipientBinding|null;
   sessionId:string;
   walletId:string;
   quoteHash:string;

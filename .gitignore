@@ -7,8 +7,15 @@ node_modules/
 .next/
 dist/
 coverage/
+apps/web/test-results/
+apps/web/playwright-report/
 *.log
 .DS_Store
 Thumbs.db
 .vercel
 .env*
+
+# Disposable local validation infrastructure and screenshots
+.validation/
+
+*.tsbuildinfo

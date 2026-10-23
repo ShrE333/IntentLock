@@ -1,4 +1,5 @@
 import {neon} from "@neondatabase/serverless";
+import {CONSUME_APPROVED_AUTHORIZATION_SQL} from '../wallets/atomic-stepup';
 import type {SessionPaymentRecord,ProofReceipt} from "./types";
 import type {PaymentProviderName} from "./providers/types";
 
@@ -7,6 +8,7 @@ function nullable(v:unknown){return v==null?null:String(v);}
 
 function mapPayment(r:any):SessionPaymentRecord{
   return {
+    expectedRecipient:r.expected_recipient??null,
     sessionId:String(r.session_id),
     walletId:String(r.wallet_id),
     quoteHash:String(r.quote_hash),
@@ -59,6 +61,7 @@ export async function getSessionPaymentByCaptureId(db:string,captureId:string){
 }
 
 export async function reserveSessionPayment(db:string,input:{
+  expectedRecipient?:import('../payments/recipient-binding').RecipientBinding|null;
   sessionId:string;
   walletId:string;
   authorizationId:string|null;
@@ -71,11 +74,11 @@ export async function reserveSessionPayment(db:string,input:{
   const rows=await neon(db)`
     INSERT INTO session_payment_links(
       session_id,wallet_id,authorization_id,quote_hash,
-      idempotency_key,amount,currency,status,provider
+      idempotency_key,amount,currency,status,provider,expected_recipient
     ) VALUES(
       ${input.sessionId},${input.walletId},${input.authorizationId},
       ${input.quoteHash},${input.idempotencyKey},${input.amount},
-      ${input.currency},'CREATING',${input.provider}
+      ${input.currency},'CREATING',${input.provider},${input.expectedRecipient?JSON.stringify(input.expectedRecipient):null}::jsonb
     )
     ON CONFLICT(session_id)
     DO UPDATE SET
@@ -115,6 +118,7 @@ export async function markSessionPaymentCreationFailed(db:string,sessionId:strin
 }
 
 export async function persistSessionPaymentCheckout(db:string,input:{
+  expectedRecipient?:import('../payments/recipient-binding').RecipientBinding|null;
   sessionId:string;
   walletId:string;
   authorizationId:string|null;
@@ -136,13 +140,13 @@ export async function persistSessionPaymentCheckout(db:string,input:{
     INSERT INTO session_payment_links(
       session_id,wallet_id,authorization_id,quote_hash,idempotency_key,
       provider,provider_order_id,provider_link_id,reference_id,
-      checkout_url,short_url,amount,currency,status,expires_at
+      checkout_url,short_url,amount,currency,status,expires_at,expected_recipient
     ) VALUES(
       ${input.sessionId},${input.walletId},${input.authorizationId},
       ${input.quoteHash},${input.idempotencyKey},${input.provider},
       ${input.providerOrderId},${legacyLinkId},${input.referenceId},
       ${input.checkoutUrl},${legacyShortUrl},${input.amount},${input.currency},
-      ${input.status},${input.expiresAt}::timestamptz
+      ${input.status},${input.expiresAt}::timestamptz,${input.expectedRecipient?JSON.stringify(input.expectedRecipient):null}::jsonb
     )
     ON CONFLICT(session_id)
     DO UPDATE SET
@@ -323,13 +327,8 @@ export async function consumeOneTimeAuthorization(db:string,input:{
   quoteHash:string;
   amount:number;
 }){
-  const rows=await neon(db)`
-    SELECT * FROM consume_wallet_one_time_authorization(
-      ${input.authorizationId},${input.walletId},${input.sessionId},
-      ${input.quoteHash},${input.amount}
-    )
-  `;
-  return rows[0] as {
+  const rows=await neon(db).query(CONSUME_APPROVED_AUTHORIZATION_SQL,[input.authorizationId,input.walletId,input.sessionId,input.quoteHash,input.amount]);
+  return (rows[0]??{consumed:false,reason:'STEP_UP_REQUEST_NOT_APPROVED',token_hash:null,authorization_expires_at:null}) as {
     consumed:boolean;reason:string;token_hash:string|null;authorization_expires_at:string|null;
   };
 }
@@ -347,19 +346,17 @@ export async function applyWalletSpendOnce(db:string,input:{
   providerLinkId:string;
   providerPaymentId:string|null;
   verifiedPayPalPayloadHash?:string;
+  verifiedWebhookPayloadHash?:string;
 }){
   if(input.provider==='paypal' && !input.verifiedPayPalPayloadHash)
     throw new Error("VERIFIED_PAYPAL_WEBHOOK_REQUIRED");
+  if(input.provider==='razorpay'&&!input.verifiedWebhookPayloadHash)
+    throw new Error('VERIFIED_RAZORPAY_WEBHOOK_REQUIRED');
   const sql=neon(db);
-  const rows=input.provider==='paypal'?await sql`
-    SELECT * FROM reconcile_paypal_wallet_spend_once_v11_0_3(
+  const rows=await sql`
+    SELECT * FROM settle_wallet_reservation_v11_4_5(
       ${input.sessionId},${input.walletId},${input.amount},${input.currency},
-      ${input.provider},${input.providerLinkId},${input.providerPaymentId},${input.verifiedPayPalPayloadHash}
-    )
-  `:await sql`
-    SELECT * FROM apply_intent_wallet_spend_once_v11(
-      ${input.sessionId},${input.walletId},${input.amount},${input.currency},
-      ${input.provider},${input.providerLinkId},${input.providerPaymentId}
+      ${input.provider},${input.providerLinkId},${input.providerPaymentId},${input.verifiedPayPalPayloadHash??input.verifiedWebhookPayloadHash??null}
     )
   `;
   const r:any=rows[0];

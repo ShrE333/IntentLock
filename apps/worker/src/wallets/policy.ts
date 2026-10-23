@@ -1,4 +1,5 @@
 import type {IntentWallet, WalletTransaction, WalletEvaluation} from "./types";
+import {validCurrency,validMoney} from './validation';
 
 const norm=(s:string)=>s.trim().toLowerCase();
 const has=(xs:string[],x:string)=>xs.map(norm).includes(norm(x));
@@ -54,6 +55,16 @@ export function evaluateWalletTransaction(
   const reasons:string[]=[];
   const remaining=Math.max(0,wallet.totalAuthority-wallet.spentAmount);
 
+  if(!validMoney(tx?.amount,tx?.currency)||!Number.isSafeInteger(tx?.quantity)||tx.quantity<1||
+     !Array.isArray(tx.features)||!tx.features.every(x=>typeof x==='string')||typeof tx.brand!=='string'||typeof tx.category!=='string'||
+     !validMoney(wallet.totalAuthority,wallet.currency)||!validMoney(wallet.spentAmount,wallet.currency,true)||
+     !validMoney(wallet.autoBuyLimit,wallet.currency,true)||!validMoney(wallet.maxSingleTransaction,wallet.currency)||
+     !Number.isFinite(Date.parse(wallet.validUntil))||
+     (tx.presentmentAmount!==undefined&&!validMoney(tx.presentmentAmount,tx.presentmentCurrency))||
+     (tx.presentmentCurrency!==undefined&&!validCurrency(tx.presentmentCurrency))){
+    return {decision:'BLOCK',violations:['INVALID_FINANCIAL_INPUT'],reasons:['Malformed monetary, quantity, currency or wallet facts.'],remainingAuthority:remaining,requestedAmount:tx?.amount,additionalAuthorityRequired:0,canAutoExecute:false,requiresHumanApproval:false};
+  }
+
   if(wallet.status!=="ACTIVE"){
     violations.push("WALLET_REVOKED");
     reasons.push("Wallet is revoked and cannot authorize new transactions.");
@@ -92,6 +103,13 @@ export function evaluateWalletTransaction(
       violations.push("REQUIRED_FEATURE_MISSING");
       reasons.push(`Missing required feature: ${feature}.`);
     }
+  }
+
+  // No current adapter independently attests product condition. Merchant text,
+  // model inference and browser assertions cannot clear a strict condition rule.
+  if(wallet.excludedConditions?.length){
+    violations.push('PRODUCT_CONDITION_UNVERIFIED');
+    reasons.push('Required product condition cannot be independently verified; excluded: '+wallet.excludedConditions.join(', ')+'.');
   }
 
   if(violations.length){

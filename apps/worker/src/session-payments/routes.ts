@@ -9,6 +9,8 @@ import {
   type SessionPaymentEnv
 } from "./service";
 import {getSessionPayment} from "./repository";
+import {getWalletReservation} from './reservations';
+import {recipientMappingConfigured} from '../payments/recipient-binding';
 import {activePaymentProvider} from "./providers";
 import {evaluatePaymentCapability,selectPaymentProvider} from "./providers/capabilities";
 
@@ -68,9 +70,11 @@ export async function handleSessionPaymentRoutes(
   if(request.method==="GET" && url.pathname==="/api/payments/provider"){
     return json({
       mode:String(env.PAYMENT_PROVIDER??"auto"),
+      paypalEnvironment:String(env.PAYPAL_ENV??'sandbox').toLowerCase()==='live'?'live':'sandbox',
       legacyDefault:activePaymentProvider(env),
       selection:"PER_TRANSACTION_CAPABILITY",
       paypalConfigured:Boolean(env.PAYPAL_CLIENT_ID&&env.PAYPAL_CLIENT_SECRET&&env.PAYPAL_WEBHOOK_ID),
+      recipientMappingConfigured:recipientMappingConfigured(env),
       razorpayConfigured:Boolean(env.RAZORPAY_KEY_ID&&env.RAZORPAY_KEY_SECRET)
     });
   }
@@ -114,7 +118,8 @@ export async function handleSessionPaymentRoutes(
     if(!env.DATABASE_URL) return json({error:"DATABASE_NOT_CONFIGURED"},500);
     const sessionId=decodeURIComponent(paymentMatch[1]);
     const payment=withLegacyShape(await getSessionPayment(env.DATABASE_URL,sessionId));
-    return json({payment,paymentLink:payment});
+    const reservation=await getWalletReservation(env.DATABASE_URL,sessionId);
+    return json({payment,paymentLink:payment,reservation});
   }
 
   const authorizeMatch=url.pathname.match(
@@ -153,7 +158,7 @@ export async function handleSessionPaymentRoutes(
     const sessionId=decodeURIComponent(proofMatch[1]);
     const session=await getSession(env.DATABASE_URL,sessionId);
     if(!session) return json({error:"SESSION_NOT_FOUND"},404);
-    const proof=await getVerifiedProofReceipt(env.DATABASE_URL,sessionId);
+    const proof=await getVerifiedProofReceipt(env.DATABASE_URL,sessionId,env.APPROVAL_SIGNING_SECRET);
     if(!proof) return json({error:"PROOF_NOT_READY",sessionStatus:session.status},404);
     return json(proof);
   }

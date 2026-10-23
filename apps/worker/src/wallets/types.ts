@@ -7,12 +7,14 @@ export type IntentWallet = {
   countryCode?: string;
   totalAuthority: number;
   spentAmount: number;
+  reservedAmount?: number;
   autoBuyLimit: number;
   maxSingleTransaction: number;
   allowedCategories: string[];
   allowedBrands: string[];
   blockedBrands: string[];
   requiredFeatures: string[];
+  excludedConditions?: ("NEW"|"USED"|"REFURBISHED")[];
   validUntil: string;
   status: "ACTIVE" | "REVOKED";
 };
@@ -42,6 +44,7 @@ export type WalletTransaction = {
   // preserve their historical quote hashes.
   payeeProvider?: string;
   payeeFingerprint?: string;
+  recipientFingerprint?: string;
 };
 
 export type WalletEvaluation = {

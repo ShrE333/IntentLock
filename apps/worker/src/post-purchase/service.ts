@@ -95,7 +95,7 @@ export async function evaluateSessionRefund(
   const reservationSummary=summarizeActiveRefundReservations(refunds,options.excludeRefundId);
   const reserved=reservationSummary.presentmentAmount;
   const reservedWalletCredit=reservationSummary.walletCreditAmount;
-  const amount=Number(input.amount);
+  const amount=input.amount;
   const currency=String(input.currency??payment.currency).toUpperCase();
   const openDisputes=payment.provider==="paypal"
     ? await openDisputesForCapture(env,payment.providerCaptureId)
@@ -142,7 +142,7 @@ export async function requestSessionRefund(env:PostPurchaseEnv,sessionId:string,
   if(!payment) throw new Error("SESSION_PAYMENT_NOT_FOUND");
   if(!payment.providerCaptureId) throw new Error("PROVIDER_CAPTURE_ID_MISSING");
 
-  const amount=Number(input.amount);
+  const amount=input.amount;
   const currency=String(input.currency??payment.currency).toUpperCase();
   const reason=validReason(input.reason);
   const key=await sha256Hex(JSON.stringify({

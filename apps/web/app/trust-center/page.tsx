@@ -1,9 +1,11 @@
 "use client";
+import {financialFetch} from '../demo-access';
+
 
 import Link from "next/link";
 import {useEffect,useMemo,useState} from "react";
 import {Shell} from "../components/Shell";
-import {API} from "../lib";
+import {requireApiUrl} from "../lib";
 import styles from "./trust-center.module.css";
 
 type Overview={
@@ -43,7 +45,7 @@ type Session={
 
 type Event={eventSeq:number;eventId:string;eventType:string;payload:Record<string,unknown>;occurredAt:string};
 type Payment={provider:string;providerOrderId:string|null;providerAuthorizationId:string|null;providerCaptureId:string|null;amount:number;currency:string;status:string;capturedAt?:string|null};
-type ProofResponse={receipt:any;verification:{auditChainValid:boolean;checkedEvents:number;currentAuditHeadHash:string|null}};
+type ProofResponse={receipt:any;verification:{verified:boolean;auditChainValid:boolean;checkedEvents:number;currentAuditHeadHash:string|null}};
 type Journey={session:Session;events:Event[];payment:Payment|null;proof:ProofResponse|null};
 
 type Evidence={
@@ -54,7 +56,7 @@ type Evidence={
 };
 
 async function request<T>(path:string,init?:RequestInit):Promise<T>{
-  const response=await fetch(`${API}${path}`,{cache:"no-store",...init});
+  const response=await financialFetch(`${requireApiUrl()}${path}`,{cache:"no-store",...init});
   const body=await response.json();
   if(!response.ok) throw new Error(body?.message??body?.error??`Request failed (${response.status})`);
   return body as T;
@@ -62,7 +64,7 @@ async function request<T>(path:string,init?:RequestInit):Promise<T>{
 
 async function optionalRequest<T>(path:string):Promise<T|null>{
   try{
-    const response=await fetch(`${API}${path}`,{cache:"no-store"});
+    const response=await financialFetch(`${requireApiUrl()}${path}`,{cache:"no-store"});
     if(!response.ok) return null;
     return await response.json() as T;
   }catch{return null;}
@@ -234,7 +236,7 @@ export default function TrustCenterPage(){
             <div><span>Country</span><strong>{payee.merchantCountry}</strong></div>
             <div className={styles.hashRow}><span>Bound fingerprint</span><code>{payee.fingerprint}</code></div>
             <p>If the structured seller identity changes during revalidation, this authorization cannot be reused.</p>
-          </div>:<LegacyNote text="This PurchaseSession was created before PayeeLock was added, so it has no payee fingerprint. New V11.2+ sessions bind seller identity automatically. The UI does not pretend legacy evidence exists."/>}
+          </div>:<LegacyNote text="This PurchaseSession was created before PayeeLock was added, so it has no payee fingerprint. New TRUST CENTER+ sessions bind seller identity automatically. The UI does not pretend legacy evidence exists."/>}
         </article>
 
         <article className={styles.panel}>
@@ -244,7 +246,7 @@ export default function TrustCenterPage(){
             <Truth label="Session" value={session.status} ok={session.status==="CAPTURED"}/>
             <Truth label="Payment" value={journey?.payment?.status??"NO PAYMENT"} ok={journey?.payment?.status==="COMPLETED"}/>
             <Truth label="Wallet ledger" value={finding?.ledgerPresent?"DEBITED ONCE":"MISSING"} ok={Boolean(finding?.ledgerPresent)}/>
-            <Truth label="Proof receipt" value={finding?.proofPresent?"PRESENT":"MISSING"} ok={Boolean(finding?.proofPresent)}/>
+            <Truth label="Proof receipt" value={journey?.proof?.verification.verified?"VERIFIED":finding?.proofPresent?"UNVERIFIED":"MISSING"} ok={Boolean(journey?.proof?.verification.verified)}/>
             <Truth label="Audit chain" value={journey?.proof?.verification.auditChainValid?"VALID":journey?.proof?"INVALID":"NOT AVAILABLE"} ok={Boolean(journey?.proof?.verification.auditChainValid)}/>
             <Truth label="Watchdog" value={finding?.status??"NOT SCANNED"} ok={finding?.status==="HEALTHY"}/>
           </div>
@@ -304,7 +306,7 @@ function buildStages(session:Session|null,payment:Payment|null,proof:ProofRespon
   const policy=Boolean(session?.selectedDecision);
   const order=Boolean(payment?.providerOrderId||session?.providerOrderId);
   const authorized=Boolean(payment?.providerAuthorizationId||session?.providerAuthorizationId||["AUTHORIZED","CAPTURE_PENDING","CAPTURED"].includes(status));
-  const verified=eventTypes.has("PAYPAL_WEBHOOK_VERIFIED")||eventTypes.has("RAZORPAY_WEBHOOK_VERIFIED")||status==="CAPTURED";
+  const verified=Boolean(proof?.verification.verified);
   const blocked=status==="BLOCKED"||status==="REJECTED";
   return [
     {id:"01",title:"Intent",state:session?"done":"waiting",description:"The user gives the agent a goal under an Intent Wallet.",evidence:session?.userPrompt??"No session"},
@@ -314,7 +316,7 @@ function buildStages(session:Session|null,payment:Payment|null,proof:ProofRespon
     {id:"05",title:"Provider order",state:order?"done":status==="READY_TO_PAY"?"current":blocked?"blocked":"waiting",description:"A payment order is created only after authority passes.",evidence:payment?.providerOrderId??session?.providerOrderId??"No provider order"},
     {id:"06",title:"Authorize + capture",state:verified?"done":authorized?"current":order?"current":"waiting",description:"Quote, payee and policy are revalidated before capture; provider success alone is not trusted.",evidence:verified?"Verified capture evidence":authorized?"Authorization/capture in progress":"Not reached"},
     {id:"07",title:"Wallet ledger",state:finding?.ledgerPresent?"done":verified?"current":"waiting",description:"Wallet authority is debited exactly once after verified settlement evidence.",evidence:finding?.ledgerPresent?"Replay-safe ledger present":"No ledger yet"},
-    {id:"08",title:"Proof",state:proof?.receipt||finding?.proofPresent?"done":finding?.ledgerPresent?"current":"waiting",description:"The transaction becomes a signed proof receipt backed by the audit chain.",evidence:session?.proofReceiptId??(finding?.proofPresent?"Proof present":"No proof yet")},
+    {id:"08",title:"Proof",state:proof?.verification.verified?"done":finding?.ledgerPresent?"current":"waiting",description:"The transaction becomes a signed proof receipt backed by the audit chain.",evidence:session?.proofReceiptId??(finding?.proofPresent?"Proof present":"No proof yet")},
     {id:"09",title:"TrustOps",state:finding?.status==="HEALTHY"?"done":finding?.status==="DRIFT"||finding?.status==="STALE_PENDING"?"current":finding?"current":"waiting",description:"Provider, session, ledger and proof are checked for drift and dispute readiness.",evidence:finding?.status??"Not scanned"},
   ] as Array<{id:string;title:string;state:"done"|"current"|"waiting"|"blocked"|"legacy";description:string;evidence:string}>;
 }

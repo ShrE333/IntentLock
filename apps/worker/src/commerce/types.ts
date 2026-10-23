@@ -27,6 +27,13 @@ export type CommerceProduct = {
   // Added only after IntentLock has normalized cross-currency/country facts.
   // Connectors should not trust or populate this field themselves.
   authorizationContext?:PaymentAuthorizationContext;
+  discovery?:{
+    only:true;endpoint:string;productId:string;variantId:string;sellerId:string;
+    sellerDomain:string;sellerUrl:string;minorAmount:number;minorDigits:number;
+    available:boolean;requestedShippingCountry:string;shippingVerified:false;
+    requiresShipping?:boolean;condition:string[];conditionTrust:'INFERRED';
+    inferredFeatures:string[];inferredAttributes:string[];descriptionTrust:'UNTRUSTED_OR_INFERRED';observedAt:string;
+  };
 };
 
 export type CommerceSearchQuery = {

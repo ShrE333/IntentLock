@@ -1,8 +1,10 @@
 "use client";
+import {financialFetch} from '../demo-access';
+
 
 import {useEffect,useState} from "react";
 import {Shell} from "../components/Shell";
-import {API} from "../lib";
+import {requireApiUrl} from "../lib";
 
 type RiskStatus = {
   engine?:string;
@@ -19,10 +21,10 @@ export default function TrustPage(){
   const [error,setError]=useState("");
 
   useEffect(()=>{
-    fetch(`${API}/api/risk/status`)
+    Promise.resolve().then(()=>financialFetch(`${requireApiUrl()}/api/risk/status`))
       .then(r=>r.json())
       .then(setStatus)
-      .catch(()=>setStatus(null));
+      .catch(e=>{setStatus(null);setError(e instanceof Error?e.message:String(e));});
   },[]);
 
   async function inspect(){
@@ -31,8 +33,8 @@ export default function TrustPage(){
     setResult(null);
 
     try{
-      const r=await fetch(
-        `${API}/api/risk/session/${encodeURIComponent(sessionId.trim())}`
+      const r=await financialFetch(
+        `${requireApiUrl()}/api/risk/session/${encodeURIComponent(sessionId.trim())}`
       );
       const data=await r.json();
       if(!r.ok) throw new Error(data.error??"Assessment not found");
