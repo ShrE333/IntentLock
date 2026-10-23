@@ -1,5 +1,6 @@
 import {describe,it,expect} from "vitest";
 import {activePaymentProvider} from "../session-payments/providers";
+import {syntheticBinding,syntheticEnv} from './recipient-fixtures';
 import {
   authorizePayPalOrder,
   capturePayPalAuthorization,
@@ -12,6 +13,7 @@ import {
 } from "../session-payments/providers/paypal";
 
 const env={
+  ...syntheticEnv,
   PAYPAL_ENV:"sandbox",
   PAYPAL_CLIENT_ID:"client",
   PAYPAL_CLIENT_SECRET:"secret",
@@ -63,6 +65,7 @@ describe("V11 PayPal primitives",()=>{
     ]);
 
     const checkout=await createPayPalOrder(env,{
+      expectedRecipient:await syntheticBinding(),
       sessionId:"ps_1",walletId:"iw_1",authorizationId:null,
       quoteHash:"a".repeat(64),productId:"sony_49",
       productTitle:"Sony Wireless ANC Headphones",merchant:"IntentLock Demo",
@@ -102,7 +105,7 @@ describe("V11 PayPal primitives",()=>{
     ]);
 
     const capture=await capturePayPalAuthorization(
-      env,"AUTH-1","ORDER-1","idem-capture",fetcher
+      env,"AUTH-1","ORDER-1","idem-capture",fetcher,undefined,{amount:49,currency:'USD'}
     );
     expect(capture.providerCaptureId).toBe("CAP-1");
     expect(capture.status).toBe("COMPLETED");

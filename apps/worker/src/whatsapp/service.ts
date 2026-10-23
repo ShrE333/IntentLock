@@ -8,6 +8,8 @@ import {
 import {parseWhatsappCommand} from "./commands";
 import {sendWahaText} from "./waha-client";
 import type {PurchaseQueueJob} from "../queue/purchase-jobs";
+import {whatsappPrincipal} from '../access/identity';
+import {assertChatResource,createExecutionJob} from '../access/jobs';
 
 type Env={
   DATABASE_URL:string;
@@ -53,6 +55,7 @@ export async function handleWhatsappMessage(
   env:Env,
   input:{chatId:string;wahaSession:string;text:string}
 ){
+  const principal=await whatsappPrincipal(input.chatId);
   let state=await ensureChatState(
     env.DATABASE_URL,
     input.chatId,
@@ -84,7 +87,7 @@ REJECT`);
   }
 
   if(cmd.type==="WALLETS"){
-    const wallets=(await listWallets(env.DATABASE_URL))
+    const wallets=(await listWallets(env.DATABASE_URL,principal))
       .filter((w:any)=>w.status==="ACTIVE")
       .slice(0,8);
 
@@ -104,7 +107,7 @@ Reply *USE 1* to select one.`);
   }
 
   if(cmd.type==="USE_WALLET"){
-    const wallets=(await listWallets(env.DATABASE_URL))
+    const wallets=(await listWallets(env.DATABASE_URL,principal))
       .filter((w:any)=>w.status==="ACTIVE");
 
     let selected:any=null;
@@ -154,6 +157,7 @@ Now send your purchase goal.`);
       return;
     }
 
+    await assertChatResource(env.DATABASE_URL,input.chatId,'wallet',state.activeWalletId,'read');
     const wallet=await getWallet(env.DATABASE_URL,state.activeWalletId);
     if(!wallet){
       await reply(env,input.chatId,input.wahaSession,
@@ -180,6 +184,7 @@ Required: ${wallet.requiredFeatures.join(", ")||"None"}`);
       return;
     }
 
+    await assertChatResource(env.DATABASE_URL,input.chatId,'session',state.activeSessionId,'read');
     const session=await getSession(env.DATABASE_URL,state.activeSessionId);
     if(!session){
       await reply(env,input.chatId,input.wahaSession,
@@ -213,17 +218,10 @@ Amount: ${session.selectedProduct?`₹${session.selectedProduct.price.toLocaleSt
     }
 
     const action=cmd.type as "ALLOW_ONCE"|"RAISE_LIMIT"|"REJECT";
+    await assertChatResource(env.DATABASE_URL,input.chatId,'session',state.activeSessionId,'approve');
 
     const result=await resolveSessionStepUp(
-      {
-        DATABASE_URL:env.DATABASE_URL,
-        APPROVAL_SIGNING_SECRET:env.APPROVAL_SIGNING_SECRET,
-        COMMERCE_CATALOG_URL:env.COMMERCE_CATALOG_URL,
-        SHOPIFY_STORE_DOMAIN:env.SHOPIFY_STORE_DOMAIN,
-        SHOPIFY_STOREFRONT_PUBLIC_TOKEN:env.SHOPIFY_STOREFRONT_PUBLIC_TOKEN,
-        SHOPIFY_STOREFRONT_PRIVATE_TOKEN:env.SHOPIFY_STOREFRONT_PRIVATE_TOKEN,
-        SHOPIFY_STOREFRONT_API_VERSION:env.SHOPIFY_STOREFRONT_API_VERSION
-      },
+      {...env},
       state.activeSessionId,
       action
     );
@@ -240,12 +238,12 @@ Money movement remains disabled.`);
     if(!env.PURCHASE_QUEUE)
       throw new Error("PURCHASE_QUEUE_NOT_CONFIGURED");
 
-    await env.PURCHASE_QUEUE.send({
+    await env.PURCHASE_QUEUE.send(await createExecutionJob(env.DATABASE_URL,{
       kind:"CREATE_PAYMENT",
       sessionId:result.session!.sessionId,
       chatId:input.chatId,
       wahaSession:input.wahaSession
-    });
+    }));
 
     await reply(env,input.chatId,input.wahaSession,
 `✅ *Authority granted*
@@ -270,6 +268,7 @@ Reply *WALLETS*, then *USE 1* to choose an Intent Wallet.`);
       return;
     }
 
+    await assertChatResource(env.DATABASE_URL,input.chatId,'wallet',state.activeWalletId,'execute');
     const activeConnector=connectorStatus(env).find(c=>c.enabled);
     if(!activeConnector){
       await reply(env,input.chatId,input.wahaSession,
@@ -326,12 +325,12 @@ Reply *WALLETS*, then *USE 1* to choose an Intent Wallet.`);
     // The webhook invocation ends after this enqueue + acknowledgement.
     // Shopify search, policy evaluation, audit and Razorpay run in a fresh
     // Queue consumer invocation with its own Cloudflare subrequest budget.
-    await env.PURCHASE_QUEUE.send({
+    await env.PURCHASE_QUEUE.send(await createExecutionJob(env.DATABASE_URL,{
       kind:"RUN_PURCHASE",
       sessionId:purchase.sessionId,
       chatId:input.chatId,
       wahaSession:input.wahaSession
-    });
+    }));
 
     await reply(env,input.chatId,input.wahaSession,
 `🤖 *IntentLock Agent started*

@@ -1,8 +1,10 @@
 "use client";
+import {financialFetch} from '../demo-access';
+
 
 import {useEffect,useMemo,useState} from "react";
 import {Shell} from "../components/Shell";
-import {API} from "../lib";
+import {requireApiUrl} from "../lib";
 import styles from "./post-purchase.module.css";
 
 type Session={sessionId:string;status:string;userPrompt:string;capturedAmount:number|null;capturedCurrency:string|null;paymentProvider:string|null;providerCaptureId:string|null;updatedAt:string;};
@@ -11,7 +13,7 @@ type State={session:Session;payment:any;refunds:Refund[];disputes:any[]};
 type Evaluation={policy:{decision:"ALLOW"|"BLOCK";violations:string[];reasons:string[];refundableRemaining:number};capture:{amount:number;currency:string;captureId:string};requested:{amount:number;currency:string};walletCredit:{amount:number;currency:string};openDisputes:any[];reason:string;};
 
 async function req<T>(path:string,init?:RequestInit):Promise<T>{
-  const r=await fetch(`${API}${path}`,{cache:"no-store",...init});
+  const r=await financialFetch(`${requireApiUrl()}${path}`,{cache:"no-store",...init});
   const b=await r.json();
   if(!r.ok) throw new Error(b?.message??b?.error??`Request failed (${r.status})`);
   return b as T;
@@ -24,7 +26,6 @@ export default function PostPurchasePage(){
   const [amount,setAmount]=useState("");
   const [reason,setReason]=useState("CUSTOMER_REQUEST");
   const [evaluation,setEvaluation]=useState<Evaluation|null>(null);
-  const [opsToken,setOpsToken]=useState("");
   const [busy,setBusy]=useState("");
   const [error,setError]=useState("");
 
@@ -63,31 +64,6 @@ export default function PostPurchasePage(){
     finally{setBusy("");}
   }
 
-  async function requestRefund(){
-    if(!sessionId||!opsToken) {setError("Enter the TrustOps admin token to execute a refund.");return;}
-    setBusy("Requesting PayPal refund…");setError("");
-    try{
-      await req(`/api/trust-center/refunds/request/${encodeURIComponent(sessionId)}`,{
-        method:"POST",headers:{"content-type":"application/json","x-intentlock-ops-token":opsToken},
-        body:JSON.stringify({amount:Number(amount),reason})
-      });
-      await loadState(sessionId);
-    }catch(e){setError(e instanceof Error?e.message:String(e));}
-    finally{setBusy("");}
-  }
-
-  async function sync(refundId:string){
-    if(!opsToken){setError("Enter the TrustOps admin token to reconcile a refund.");return;}
-    setBusy("Reading PayPal refund truth and reconciling wallet authority…");setError("");
-    try{
-      await req(`/api/trust-center/refunds/${encodeURIComponent(refundId)}/sync`,{
-        method:"POST",headers:{"content-type":"application/json","x-intentlock-ops-token":opsToken}
-      });
-      await loadState(sessionId);
-    }catch(e){setError(e instanceof Error?e.message:String(e));}
-    finally{setBusy("");}
-  }
-
   return <Shell><div className={styles.page}>
     <header className={styles.header}>
       <span>POST-PURCHASE · REFUND & DISPUTE CONTROL</span>
@@ -122,13 +98,13 @@ export default function PostPurchasePage(){
 
     <section className={styles.card}>
       <div className={styles.cardTop}><div><span className={styles.kicker}>EXECUTION</span><h2>Protected refund execution</h2><p>Provider POST success does not restore wallet authority. IntentLock restores it only after an authenticated PayPal refund read confirms COMPLETED.</p></div></div>
-      <label className={styles.token}><span>TrustOps admin token (kept only in this page state)</span><input type="password" value={opsToken} onChange={e=>setOpsToken(e.target.value)} placeholder="Required for money-moving actions"/></label>
-      <button className={styles.primary} onClick={requestRefund} disabled={evaluation?.policy.decision!=="ALLOW"}>Request approved refund</button>
+      <p>Refund execution and provider synchronization require an authenticated server-side TrustOps operator.</p>
+
     </section>
 
     <section className={styles.card}>
       <div className={styles.cardTop}><div><span className={styles.kicker}>REFUND STATE</span><h2>Refund ledger</h2></div><button onClick={()=>loadState()}>Refresh</button></div>
-      {!state?.refunds?.length?<div className={styles.empty}>No refunds for this transaction.</div>:<div className={styles.table}>{state.refunds.map(r=><div className={styles.row} key={r.refundId}><code>{r.refundId.slice(0,16)}…</code><span>{r.currency} {r.amount.toFixed(2)}</span><span>restore {r.walletCreditCurrency} {r.walletCreditAmount.toFixed(2)}</span><strong>{r.status}</strong><button onClick={()=>sync(r.refundId)} disabled={r.status==="COMPLETED"}>Sync provider truth</button></div>)}</div>}
+      {!state?.refunds?.length?<div className={styles.empty}>No refunds for this transaction.</div>:<div className={styles.table}>{state.refunds.map(r=><div className={styles.row} key={r.refundId}><code>{r.refundId.slice(0,16)}…</code><span>{r.currency} {r.amount.toFixed(2)}</span><span>restore {r.walletCreditCurrency} {r.walletCreditAmount.toFixed(2)}</span><strong>{r.status}</strong><span>Operator synchronization</span></div>)}</div>}
     </section>
 
     <section className={styles.card}>

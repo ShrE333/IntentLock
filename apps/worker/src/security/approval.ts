@@ -78,14 +78,14 @@ function bytesToBase64Url(bytes: Uint8Array): string {
     .replace(/=+$/g, "");
 }
 
-function base64UrlToBytes(value: string): Uint8Array {
+function base64UrlToBytes(value: string): Uint8Array<ArrayBuffer> {
   const padded = value.replace(/-/g, "+").replace(/_/g, "/")
     + "=".repeat((4 - (value.length % 4 || 4)) % 4);
   const binary = atob(padded);
   return Uint8Array.from(binary, (char) => char.charCodeAt(0));
 }
 
-function encodeText(value: string): Uint8Array {
+function encodeText(value: string): Uint8Array<ArrayBuffer> {
   return new TextEncoder().encode(value);
 }
 

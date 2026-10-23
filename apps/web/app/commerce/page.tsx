@@ -71,11 +71,9 @@ export default function CommercePage(){
         getJson<{wallets:Wallet[]}>("/api/wallets"),
         getJson<{connectors:Connector[]}>("/api/commerce/connectors")
       ]);
-      setWallets(w.wallets);setConnectors(c.connectors);
+      setWallets(w.wallets);setConnectors(c.connectors.filter(x=>x.id==='paypal-demo-marketplace'));
       if(!walletId){const ready=w.wallets.find(walletReady);if(ready) setWalletId(ready.walletId);}
-      const preferred=
-        c.connectors.find(x=>x.enabled&&x.id==="ebay-browse")??
-        c.connectors.find(x=>x.enabled&&x.id==="paypal-demo-marketplace")??
+      const preferred=c.connectors.find(x=>x.enabled&&x.id==="paypal-demo-marketplace")??
         c.connectors.find(x=>x.enabled);
       if(preferred&&!c.connectors.some(x=>x.id===connectorId&&x.enabled)) setConnectorId(preferred.id);
     }catch(e){setError(e instanceof Error?e.message:String(e));}
@@ -103,9 +101,9 @@ export default function CommercePage(){
     </div></header>
 
     <section className="commerceHero"><div>
-      <span className="miniLabel">LIVE EBAY + MARKETPLACE AGNOSTIC</span>
+      <span className="miniLabel">DISCOVERY ONLY · NO MERCHANT CHECKOUT</span>
       <h2>The marketplace can change. The payment rail can change. The authorization boundary does not.</h2>
-      <p>eBay listing prose stays untrusted; structured listing facts, payee identity, country context and bound FX facts enter deterministic policy.</p>
+      <p>Configured catalogs supply structured facts for deterministic policy. Merchant prose stays untrusted; a discovered listing is not a merchant order or verified payment recipient.</p>
     </div></section>
 
     <article className="card commerceSearchCard"><div className="commerceSearchGrid">
@@ -120,7 +118,7 @@ export default function CommercePage(){
       <button className="button buttonPrimary" onClick={search} disabled={!!busy}>Search Marketplace</button>
     </div></article>
 
-    <section className="connectorStrip">{connectors.map(c=><div key={c.id} className={c.enabled?"connectorChip active":"connectorChip"}><strong>{c.name}</strong><span>{c.enabled?`${connectorMode(c.kind)} · CONNECTED`:"ADAPTER SLOT"}</span></div>)}</section>
+    <section className="connectorStrip">{connectors.map(c=><div key={c.id} className={c.enabled?"connectorChip active":"connectorChip"}><strong>{c.name}</strong><span>{c.enabled?`${connectorMode(c.kind)} · CONFIGURED`:"ADAPTER SLOT"}</span></div>)}</section>
 
     {busy&&<div className="alert alertInfo">{busy}</div>}
     {error&&<div className="alert alertError">{error}</div>}

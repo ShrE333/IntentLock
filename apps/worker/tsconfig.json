@@ -11,10 +11,11 @@
     "resolveJsonModule": true,
     "isolatedModules": true,
     "noEmit": true,
-    "experimentalDecorators": true
+    "experimentalDecorators": false
   },
   "include": [
     "src/**/*.ts",
+    "browser/**/*.ts",
     "worker-configuration.d.ts"
   ]
 }

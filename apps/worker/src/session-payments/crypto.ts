@@ -41,3 +41,15 @@ export async function signProofHash(secret:string,proofHash:string){
 export async function buildProofHash(payload:unknown){
   return sha256Hex(canonicalJson(payload));
 }
+
+export async function verifyReceiptIntegrity(receipt:{payload:unknown;proofHash:string;proofSignature:string},secret?:string){
+  const computed=await buildProofHash(receipt.payload);
+  const payloadHashValid=computed===receipt.proofHash;
+  let signatureValid=false;
+  if(secret&&/^[a-f0-9]{64}$/.test(receipt.proofSignature)){
+    const key=await crypto.subtle.importKey('raw',enc(secret),{name:'HMAC',hash:'SHA-256'},false,['verify']);
+    const bytes=new Uint8Array(receipt.proofSignature.match(/../g)!.map(x=>parseInt(x,16)));
+    signatureValid=await crypto.subtle.verify('HMAC',key,bytes,enc(`intentlock-proof-v1|${receipt.proofHash}`));
+  }
+  return {payloadHashValid,signatureValid};
+}

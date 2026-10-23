@@ -4,10 +4,11 @@ import type { ApprovalPayload } from "../security/approval";
 
 export async function persistIntent(
   sql: NeonQueryFunction<false, false>,
-  intent: IntentContract
+  intent: IntentContract,
+  ownerPrincipal?:string
 ): Promise<void> {
   await sql`
-    INSERT INTO intents (
+    WITH saved AS (INSERT INTO intents (
       id,
       category,
       max_amount,
@@ -41,6 +42,11 @@ export async function persistIntent(
       preferred_features = EXCLUDED.preferred_features,
       requires_approval = EXCLUDED.requires_approval,
       expires_at = EXCLUDED.expires_at
+    RETURNING id), owned AS (
+      INSERT INTO financial_resource_owners(resource_type,resource_id,principal_id)
+      SELECT 'intent',id,${ownerPrincipal??null}::text FROM saved WHERE ${ownerPrincipal??null}::text IS NOT NULL
+      ON CONFLICT(resource_type,resource_id) DO NOTHING
+    ) SELECT id FROM saved
   `;
 }
 

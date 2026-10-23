@@ -1,6 +1,8 @@
-export const API =
-  process.env.NEXT_PUBLIC_INTENTLOCK_API_URL ??
-  "http://localhost:8787";
+import {resolveApiUrl} from './runtime-config';
+import {financialFetch} from './demo-access';
+export function requireApiUrl(){return resolveApiUrl(process.env.NEXT_PUBLIC_INTENTLOCK_API_URL,process.env.NODE_ENV==='production');}
+// Retained for callers outside the app; production has no localhost fallback.
+export const API=process.env.NEXT_PUBLIC_INTENTLOCK_API_URL??(process.env.NODE_ENV==='production'?'':'http://localhost:8787');
 
 export type IntentContract = {
   id: string;
@@ -28,7 +30,7 @@ export type Proposal = {
 };
 
 export async function getJson<T>(path: string): Promise<T> {
-  const response = await fetch(`${API}${path}`, {
+  const response = await financialFetch(`${requireApiUrl()}${path}`, {
     cache: "no-store",
   });
 
@@ -49,7 +51,7 @@ export async function postJson<T>(
   path: string,
   body: unknown
 ): Promise<T> {
-  const response = await fetch(`${API}${path}`, {
+  const response = await financialFetch(`${requireApiUrl()}${path}`, {
     method: "POST",
     headers: {
       "content-type": "application/json",

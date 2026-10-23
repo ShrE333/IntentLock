@@ -4,6 +4,7 @@ import {connectorStatus,type CommerceEnv} from "../commerce/registry";
 import type {AuthorizationContextEnv} from "../payments/authorization-context";
 import {addEvent,createSession,getEvents,getSession,listSessions} from "./repository";
 import {runPurchaseSession,resolveSessionStepUp} from "./orchestrator";
+import {listPrincipal} from '../access/identity';
 
 const headers={
   "content-type":"application/json; charset=utf-8",
@@ -36,7 +37,7 @@ export async function handleSessionRoutes(request:Request,env:Env,url:URL):Promi
 
   try{
     if(request.method==="GET" && url.pathname==="/api/sessions")
-      return json({sessions:await listSessions(env.DATABASE_URL)});
+      return json({sessions:await listSessions(env.DATABASE_URL,listPrincipal(env))});
 
     if(request.method==="POST" && url.pathname==="/api/sessions"){
       const b:any=await request.json();

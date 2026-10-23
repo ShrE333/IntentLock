@@ -56,9 +56,28 @@ export async function getSession(db:string,id:string){
   return rows.length?mapSession(rows[0]):null;
 }
 
-export async function listSessions(db:string){
-  const rows=await neon(db)`SELECT * FROM purchase_sessions ORDER BY created_at DESC LIMIT 30`;
+export const LIST_SESSIONS_SQL=`SELECT s.* FROM purchase_sessions s WHERE ($1::text IS NULL OR
+ EXISTS(SELECT 1 FROM financial_resource_owners o WHERE o.resource_type='wallet' AND o.resource_id=s.wallet_id AND o.principal_id=$1)
+ OR EXISTS(SELECT 1 FROM financial_wallet_grants g WHERE g.wallet_id=s.wallet_id AND g.principal_id=$1 AND 'read'=ANY(g.permissions) AND g.revoked_at IS NULL AND g.expires_at>NOW()))
+ ORDER BY s.created_at DESC LIMIT 30`;
+export async function listSessions(db:string,principalId?:string){
+  const rows=await neon(db).query(LIST_SESSIONS_SQL,[principalId??null]);
   return rows.map(mapSession);
+}
+
+export const CLAIM_SESSION_RUN_SQL=`UPDATE purchase_sessions SET status='SEARCHING',updated_at=NOW()
+  WHERE session_id=$1 AND status='CREATED' AND selected_product IS NULL
+    AND provider_order_id IS NULL AND quote_hash IS NULL AND authorization_id IS NULL
+    AND selected_decision IS NULL AND step_up_request_id IS NULL
+    AND razorpay_payment_link_id IS NULL AND razorpay_payment_id IS NULL
+    AND provider_authorization_id IS NULL AND provider_capture_id IS NULL
+    AND payment_link_url IS NULL AND payment_idempotency_key IS NULL
+    AND proof_receipt_id IS NULL AND captured_amount IS NULL AND captured_at IS NULL
+    AND NOT EXISTS (SELECT 1 FROM session_payment_links p WHERE p.session_id=purchase_sessions.session_id)
+  RETURNING *`;
+export async function claimSessionRun(db:string,id:string){
+  const rows=await neon(db).query(CLAIM_SESSION_RUN_SQL,[id]);
+  return rows.length?mapSession(rows[0]):null;
 }
 
 export async function updateSession(db:string,id:string,input:{

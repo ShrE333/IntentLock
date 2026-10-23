@@ -1,4 +1,5 @@
 import { z } from "zod";
+import {validMoney} from '../wallets/validation';
 
 export const IntentContractSchema = z.object({
   id: z.string().min(1),
@@ -18,7 +19,7 @@ export const PurchaseProposalSchema = z.object({
   brand: z.string().min(1),
   category: z.string().min(1),
   quantity: z.number().int().positive(),
-  unitPrice: z.number().nonnegative(),
+  unitPrice: z.number().positive().refine(v=>validMoney(v,'INR'),'INVALID_MONETARY_VALUE'),
   currency: z.literal("INR"),
   features: z.array(z.string()).default([]),
   inventoryAvailable: z.boolean(),
@@ -30,6 +31,7 @@ export type PurchaseProposal = z.infer<typeof PurchaseProposalSchema>;
 
 export type PolicyCode =
   | "ALLOW"
+  | "INVALID_FINANCIAL_INPUT"
   | "REQUIRES_APPROVAL"
   | "INTENT_EXPIRED"
   | "QUOTE_EXPIRED"

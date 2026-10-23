@@ -5,7 +5,7 @@ import {Shell} from "../components/Shell";
 import {getJson,postJson} from "../lib";
 
 type Wallet={
-  walletId:string;name:string;countryCode:string;currency:string;totalAuthority:number;spentAmount:number;
+  walletId:string;name:string;countryCode:string;currency:string;totalAuthority:number;spentAmount:number;reservedAmount?:number;
   autoBuyLimit:number;maxSingleTransaction:number;allowedCategories:string[];
   allowedBrands:string[];blockedBrands:string[];requiredFeatures:string[];
   validUntil:string;status:"ACTIVE"|"REVOKED";
@@ -35,6 +35,7 @@ const money=(n:number,currency:string)=>new Intl.NumberFormat("en-US",{
 }).format(n);
 
 export default function WalletsPage(){
+  const [loading,setLoading]=useState(true);
   const [wallets,setWallets]=useState<Wallet[]>([]);
   const [selectedId,setSelectedId]=useState("");
   const [evaluation,setEvaluation]=useState<Evaluation|null>(null);
@@ -44,15 +45,15 @@ export default function WalletsPage(){
   const [error,setError]=useState("");
 
   const [form,setForm]=useState({
-    name:"Global Electronics",countryCode:"IN",currency:"INR",totalAuthority:"10000",
-    autoBuyLimit:"6000",maxSingleTransaction:"7500",allowedCategories:"electronics",
+    name:"Sandbox Electronics",countryCode:"US",currency:"USD",totalAuthority:"100",
+    autoBuyLimit:"55",maxSingleTransaction:"75",allowedCategories:"electronics",
     allowedBrands:"Sony, Bose",blockedBrands:"Boat",requiredFeatures:"wireless, ANC",
-    validityHours:"72"
+    validityHours:"24"
   });
 
   const [tx,setTx]=useState({
     productName:"Sony Wireless ANC Headphones",category:"electronics",brand:"Sony",
-    amount:"5000",quantity:"1",features:"wireless, ANC"
+    amount:"49",quantity:"1",features:"wireless, ANC"
   });
 
   const selected=useMemo(()=>wallets.find(w=>w.walletId===selectedId)??null,[wallets,selectedId]);
@@ -63,6 +64,7 @@ export default function WalletsPage(){
       setWallets(r.wallets);
       if(!selectedId&&r.wallets[0]) setSelectedId(r.wallets[0].walletId);
     }catch(e){setError(e instanceof Error?e.message:String(e));}
+    finally{setLoading(false);}
   }
   useEffect(()=>{load();},[]);
 
@@ -146,9 +148,9 @@ export default function WalletsPage(){
       <article className="card">
         <div className="cardHeader"><div><h2>Active Wallets</h2><p>Delegated authority currently stored in Neon.</p></div><span className="pill">{wallets.length} TOTAL</span></div>
         <div className="walletList">
-          {!wallets.length&&<div className="walletEmpty">No Intent Wallet yet.</div>}
+          {loading?<div className="walletEmpty" role="status">Loading Intent Wallets...</div>:!wallets.length&&<div className="walletEmpty">No Intent Wallet yet.</div>}
           {wallets.map(w=>{const expired=new Date(w.validUntil).getTime()<=Date.now();return <button key={w.walletId} className={w.walletId===selectedId?"walletListItem active":"walletListItem"} onClick={()=>{setSelectedId(w.walletId);setEvaluation(null);setStepUp(null);setResolution(null);}}>
-            <div><strong>{w.name}</strong><span>{money(w.totalAuthority-w.spentAmount,w.currency)} remaining · expires {new Date(w.validUntil).toLocaleString()}</span></div><span className="walletStatus">{w.countryCode} · {w.currency} · {w.status!=="ACTIVE"?"REVOKED":expired?"EXPIRED":"READY"}</span>
+            <div><strong>{w.name}</strong><span>{money(w.totalAuthority-w.spentAmount-(w.reservedAmount??0),w.currency)} available · {money(w.reservedAmount??0,w.currency)} reserved · expires {new Date(w.validUntil).toLocaleString()}</span></div><span className="walletStatus">{w.countryCode} · {w.currency} · {w.status!=="ACTIVE"?"REVOKED":expired?"EXPIRED":"READY"}</span>
           </button>;})}
         </div>
       </article>

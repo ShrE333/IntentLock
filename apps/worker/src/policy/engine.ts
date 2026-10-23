@@ -5,6 +5,7 @@ import type {
 } from "../types/contracts";
 
 const normalize = (value: string) => value.trim().toLowerCase();
+import {validMoney} from '../wallets/validation';
 
 export function evaluatePurchase(
   intent: IntentContract,
@@ -14,6 +15,9 @@ export function evaluatePurchase(
 ): PolicyResult {
   const violations: string[] = [];
   const totalAmount = proposal.quantity * proposal.unitPrice;
+  if(!validMoney(proposal.unitPrice,proposal.currency)||!validMoney(totalAmount,proposal.currency)||!validMoney(intent.maxAmount,intent.currency)||!Number.isSafeInteger(proposal.quantity)||proposal.quantity<1||!Number.isSafeInteger(intent.maxQuantity)||intent.maxQuantity<1||!Number.isFinite(Date.parse(intent.expiresAt))||!Number.isFinite(Date.parse(proposal.quoteExpiresAt))){
+    return {allowed:false,code:'INVALID_FINANCIAL_INPUT',violations:['INVALID_FINANCIAL_INPUT'],totalAmount};
+  }
 
   if (new Date(intent.expiresAt) <= now) violations.push("INTENT_EXPIRED");
   if (new Date(proposal.quoteExpiresAt) <= now) violations.push("QUOTE_EXPIRED");

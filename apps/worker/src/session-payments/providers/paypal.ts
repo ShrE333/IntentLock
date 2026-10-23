@@ -5,7 +5,8 @@ import type {
   PaymentCheckout
 } from "./types";
 
-export type PayPalEnv = {
+import {assertTrustedRecipient,type RecipientEnv} from '../../payments/recipient-binding';
+export type PayPalEnv = RecipientEnv & {
   PAYPAL_ENV?: string;
   PAYPAL_CLIENT_ID?: string;
   PAYPAL_CLIENT_SECRET?: string;
@@ -14,6 +15,7 @@ export type PayPalEnv = {
 };
 
 type FetchLike = typeof fetch;
+import {validMoney} from '../../wallets/validation';
 
 export const PAYPAL_CURRENCIES = new Set([
   "AUD","BRL","CAD","CNY","CZK","DKK","EUR","HKD","HUF","ILS","JPY",
@@ -40,6 +42,7 @@ export function formatPayPalMoney(amount:number,currency:string){
     if(!Number.isInteger(amount)) throw new Error(`PAYPAL_ZERO_DECIMAL_CURRENCY_REQUIRES_INTEGER:${c}`);
     return amount.toFixed(0);
   }
+  if(!validMoney(amount,c))throw new Error('INVALID_MONETARY_VALUE');
   return amount.toFixed(2);
 }
 
@@ -81,9 +84,11 @@ async function paypalRequest(
   path:string,
   init:RequestInit,
   requestId?:string,
-  fetcher:FetchLike=globalThis.fetch.bind(globalThis)
+  fetcher:FetchLike=globalThis.fetch.bind(globalThis),
+  accessToken?:string,
+  onResponse?:(raw:unknown)=>Promise<void>
 ){
-  const token=await getPayPalAccessToken(env,fetcher);
+  const token=accessToken??await getPayPalAccessToken(env,fetcher);
   const headers:Record<string,string>={
     authorization:`Bearer ${token}`,
     "content-type":"application/json",
@@ -94,6 +99,7 @@ async function paypalRequest(
 
   const response=await fetcher(`${paypalBaseUrl(env)}${path}`,{...init,headers});
   const body:any=await jsonOrText(response);
+  await onResponse?.(body);
   if(!response.ok){
     const detail=body?.details?.[0]?.issue??body?.message??body?.name??"request failed";
     throw new Error(`PAYPAL_${response.status}:${detail}`);
@@ -129,6 +135,7 @@ export async function createPayPalOrder(
   input:CreateCheckoutInput,
   fetcher:FetchLike=globalThis.fetch.bind(globalThis)
 ):Promise<PaymentCheckout>{
+  const recipient=await assertTrustedRecipient(env,input.expectedRecipient);
   const currency=input.currency.toUpperCase();
   if(!isPayPalSupportedCurrency(currency))
     throw new Error(`PAYPAL_UNSUPPORTED_CURRENCY:${currency}`);
@@ -144,12 +151,14 @@ export async function createPayPalOrder(
     "/v2/checkout/orders",
     {
       method:"POST",
+      headers:{Prefer:'return=representation'},
       body:JSON.stringify({
         intent:"AUTHORIZE",
         purchase_units:[{
           reference_id:input.sessionId,
           custom_id:input.sessionId,
           invoice_id:`intentlock-${input.sessionId}`.slice(0,127),
+          payee:{merchant_id:recipient.paypalMerchantId},
           description:`IntentLock: ${input.productTitle}`.slice(0,127),
           amount:{currency_code:currency,value:formatPayPalMoney(input.amount,currency)}
         }],
@@ -157,7 +166,7 @@ export async function createPayPalOrder(
       })
     },
     `create-${input.idempotencyKey}`,
-    fetcher
+    fetcher,undefined,input.onProviderResponse
   );
 
   const approve=Array.isArray(body?.links)
@@ -165,38 +174,62 @@ export async function createPayPalOrder(
     : null;
   if(!body?.id || !approve?.href) throw new Error("PAYPAL_APPROVAL_URL_MISSING");
   return {
-    provider:"paypal",providerOrderId:String(body.id),checkoutUrl:String(approve.href),
+    providerResponse:body,provider:"paypal",providerOrderId:String(body.id),checkoutUrl:String(approve.href),
     status:String(body.status??"CREATED"),expiresAt:input.expiresAt,referenceId:input.sessionId
   };
 }
 
 export async function authorizePayPalOrder(
   env:PayPalEnv,orderId:string,idempotencyKey:string,
-  fetcher:FetchLike=globalThis.fetch.bind(globalThis)
+  fetcher:FetchLike=globalThis.fetch.bind(globalThis),onResponse?:(raw:unknown)=>Promise<void>
 ):Promise<PaymentAuthorization>{
   const body=await paypalRequest(
     env,`/v2/checkout/orders/${encodeURIComponent(orderId)}/authorize`,
-    {method:"POST",body:"{}"},`authorize-${idempotencyKey}`,fetcher
+    {method:"POST",headers:{Prefer:'return=representation'},body:"{}"},`authorize-${idempotencyKey}`,fetcher,undefined,onResponse
   );
   const auth=body?.purchase_units?.[0]?.payments?.authorizations?.[0];
   if(!auth?.id) throw new Error("PAYPAL_AUTHORIZATION_ID_MISSING");
   return {
-    provider:"paypal",providerOrderId:orderId,providerAuthorizationId:String(auth.id),
+    providerResponse:body,provider:"paypal",providerOrderId:orderId,providerAuthorizationId:String(auth.id),
     status:String(auth.status??body.status??"AUTHORIZED"),amount:Number(auth?.amount?.value??0),
     currency:String(auth?.amount?.currency_code??"").toUpperCase()
   };
 }
 
+export async function getPayPalReservationTruth(env:PayPalEnv,orderId:string,authorizationId?:string,fetcher:FetchLike=globalThis.fetch.bind(globalThis)){
+ const order=await paypalRequest(env,`/v2/checkout/orders/${encodeURIComponent(orderId)}`,{method:'GET'},undefined,fetcher);
+ if(order?.id!==orderId)throw new Error('PAYPAL_RECONCILIATION_IDENTITY_MISMATCH');
+ if(!authorizationId){
+  const auths=(order?.purchase_units??[]).flatMap((u:any)=>u?.payments?.authorizations??[]);
+  if(auths.length!==1||!auths[0]?.id)return {order,authorization:null};
+  authorizationId=String(auths[0].id);
+ }
+ const authorization=await paypalRequest(env,`/v2/payments/authorizations/${encodeURIComponent(authorizationId)}`,{method:'GET'},undefined,fetcher);
+ if(authorization?.id!==authorizationId)throw new Error('PAYPAL_RECONCILIATION_IDENTITY_MISMATCH');
+ return {order,authorization};
+}
+
+export async function getPayPalRecipientFacts(env:PayPalEnv,orderId:string,authorizationId?:string|null,captureId?:string|null,fetcher:FetchLike=globalThis.fetch.bind(globalThis)){
+ const token=await getPayPalAccessToken(env,fetcher);
+ const read=(path:string)=>paypalRequest(env,path,{method:'GET'},undefined,fetcher,token);
+ const order=await read(`/v2/checkout/orders/${encodeURIComponent(orderId)}`);
+ const authorization=authorizationId?await read(`/v2/payments/authorizations/${encodeURIComponent(authorizationId)}`):null;
+ const capture=captureId?await read(`/v2/payments/captures/${encodeURIComponent(captureId)}`):null;
+ return {order,authorization,capture};
+}
+
 export async function capturePayPalAuthorization(
   env:PayPalEnv,authorizationId:string,orderId:string,idempotencyKey:string,
-  fetcher:FetchLike=globalThis.fetch.bind(globalThis)
+  fetcher:FetchLike=globalThis.fetch.bind(globalThis),onResponse?:(raw:unknown)=>Promise<void>,boundAmount?:{amount:number;currency:string}
 ):Promise<PaymentCaptureRequest>{
+  if(!boundAmount)throw new Error('PAYPAL_BOUND_CAPTURE_AMOUNT_REQUIRED');
+  const amount={currency_code:boundAmount.currency,value:formatPayPalMoney(boundAmount.amount,boundAmount.currency)};
   const body=await paypalRequest(
     env,`/v2/payments/authorizations/${encodeURIComponent(authorizationId)}/capture`,
-    {method:"POST",body:"{}"},`capture-${idempotencyKey}`,fetcher
+    {method:"POST",headers:{Prefer:'return=representation'},body:JSON.stringify({amount,final_capture:true})},`capture-${idempotencyKey}`,fetcher,undefined,onResponse
   );
   return {
-    provider:"paypal",providerOrderId:orderId,providerAuthorizationId:authorizationId,
+    providerResponse:body,provider:"paypal",providerOrderId:orderId,providerAuthorizationId:authorizationId,
     providerCaptureId:body?.id?String(body.id):null,status:String(body?.status??"PENDING"),
     amount:Number(body?.amount?.value??0),currency:String(body?.amount?.currency_code??"").toUpperCase()
   };

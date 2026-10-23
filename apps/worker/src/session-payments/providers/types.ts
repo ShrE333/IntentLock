@@ -27,6 +27,7 @@ export type PaymentProviderSelection={
 };
 
 export type PaymentCheckout = {
+  providerResponse?:unknown;
   provider: PaymentProviderName;
   providerOrderId: string;
   checkoutUrl: string;
@@ -36,6 +37,7 @@ export type PaymentCheckout = {
 };
 
 export type PaymentAuthorization = {
+  providerResponse?:unknown;
   provider: PaymentProviderName;
   providerOrderId: string;
   providerAuthorizationId: string;
@@ -45,6 +47,7 @@ export type PaymentAuthorization = {
 };
 
 export type PaymentCaptureRequest = {
+  providerResponse?:unknown;
   provider: PaymentProviderName;
   providerOrderId: string;
   providerAuthorizationId: string;
@@ -55,6 +58,8 @@ export type PaymentCaptureRequest = {
 };
 
 export type CreateCheckoutInput = {
+  onProviderResponse?:(raw:unknown)=>Promise<void>;
+  expectedRecipient?:import('../../payments/recipient-binding').RecipientBinding;
   sessionId: string;
   walletId: string;
   authorizationId: string | null;

@@ -6,6 +6,9 @@ import * as audit from "../session-payments/audit";
 import * as proof from "../session-payments/proof";
 import * as paypal from "../session-payments/providers/paypal";
 import {finalizePayPalCaptureJob,processSessionPayPalWebhook,type SessionPaymentEnv} from "../session-payments/service";
+import {syntheticBinding} from './recipient-fixtures';
+import {verifyProviderRecipient} from '../session-payments/recipient-evidence';
+vi.mock('../session-payments/recipient-evidence',()=>({verifyProviderRecipient:vi.fn()}));
 
 vi.mock("../session-payments/repository",async importOriginal=>({
   ...await importOriginal<typeof import("../session-payments/repository")>(),
@@ -28,8 +31,9 @@ let saved:Map<string,any>;
 const request=()=>new Request("https://worker.test/webhooks/paypal",{method:"POST",body:JSON.stringify(event)});
 const deliver=()=>processSessionPayPalWebhook(env,request());
 
-beforeEach(()=>{
+beforeEach(async()=>{
   vi.resetAllMocks();
+  vi.mocked(verifyProviderRecipient).mockResolvedValue('isolated-verified-recipient');
   vi.spyOn(console,"log").mockImplementation(()=>{});
   vi.spyOn(console,"error").mockImplementation(()=>{});
   saved=new Map();receipt=null;debited=false;debitCount=0;
@@ -37,7 +41,7 @@ beforeEach(()=>{
     id:"CAP-1",amount:{value:"49.00",currency_code:"USD"},
     supplementary_data:{related_ids:{order_id:"ORDER-1",authorization_id:"AUTH-1"}}
   }};
-  payment={sessionId:"ps_1",walletId:"iw_1",provider:"paypal",providerOrderId:"ORDER-1",
+  payment={expectedRecipient:await syntheticBinding(),sessionId:"ps_1",walletId:"iw_1",provider:"paypal",providerOrderId:"ORDER-1",
     providerAuthorizationId:"AUTH-1",providerCaptureId:"CAP-1",amount:49,currency:"USD",status:"CAPTURE_REQUESTED"};
   session={sessionId:"ps_1",walletId:"iw_1",status:"CAPTURE_PENDING",proofReceiptId:null,
     selectedProduct:{authorizationContext:{walletAmount:4091.5,walletCurrency:"INR"}}};
@@ -66,6 +70,18 @@ beforeEach(()=>{
 });
 
 describe("verified PayPal webhook finalization",()=>{
+  it('preserves an unmatched signed webhook without inventing session ownership',async()=>{
+    vi.mocked(repo.getSessionPaymentByCaptureId).mockResolvedValue(null);vi.mocked(repo.getSessionPaymentByProviderOrderId).mockResolvedValue(null);
+    expect((await deliver()).status).toBe(200);expect(saved.size).toBe(1);expect(repo.claimSessionWebhook).toHaveBeenCalledWith(env.DATABASE_URL,expect.objectContaining({sessionId:null}));expect(debitCount).toBe(0);expect(proof.createProofReceipt).not.toHaveBeenCalled();
+  });
+  it('keeps raw signed evidence without trusted CAPTURED, debit or proof on recipient mismatch',async()=>{
+    vi.mocked(verifyProviderRecipient).mockRejectedValue(new Error('PAYPAL_RECIPIENT_EVIDENCE_MISMATCH'));
+    await expect(deliver()).rejects.toThrow('PAYPAL_RECIPIENT_EVIDENCE_MISMATCH');expect(saved.size).toBe(1);expect(debitCount).toBe(0);expect(repo.markSessionPaymentCaptured).not.toHaveBeenCalled();expect(proof.createProofReceipt).not.toHaveBeenCalled();
+  });
+  it('keeps a historical finalized capture readable without upgrading or modifying its old evidence',async()=>{
+    await deliver();payment.expectedRecipient=null;const original=JSON.stringify(receipt);vi.clearAllMocks();
+    expect((await deliver()).status).toBe(200);expect(JSON.stringify(receipt)).toBe(original);expect(verifyProviderRecipient).not.toHaveBeenCalled();expect(proof.createProofReceipt).not.toHaveBeenCalled();expect(debitCount).toBe(1);
+  });
   it("settles verified USD evidence with the bound INR wallet amount",async()=>{
     expect((await deliver()).status).toBe(200);
     expect(session.status).toBe("CAPTURED");expect(session.proofReceiptId).toBe("pr_1");
@@ -113,14 +129,14 @@ describe("verified PayPal webhook finalization",()=>{
   it.each([
     ["amount","48.00","AMOUNT"],["amount","NaN","AMOUNT"],["currency","INR","CURRENCY"],
     ["capture","CAP-OTHER","CAPTURE"],["order","ORDER-OTHER","ORDER"],["authorization","AUTH-OTHER","AUTHORIZATION"]
-  ])("rejects incorrect %s before claim or wallet debit",async(field,value,code)=>{
+  ])("preserves signed incorrect %s evidence without wallet debit",async(field,value,code)=>{
     if(field==="amount") event.resource.amount.value=value;
     if(field==="currency") event.resource.amount.currency_code=value;
     if(field==="capture") event.resource.id=value;
     if(field==="order") event.resource.supplementary_data.related_ids.order_id=value;
     if(field==="authorization") event.resource.supplementary_data.related_ids.authorization_id=value;
     await expect(deliver()).rejects.toThrow(code+"_MISMATCH");
-    expect(repo.claimSessionWebhook).not.toHaveBeenCalled();expect(debitCount).toBe(0);
+    expect(repo.claimSessionWebhook).toHaveBeenCalled();expect(saved.size).toBe(1);expect(debitCount).toBe(0);
   });
 
   it("does not bypass validation for an already finalized duplicate",async()=>{

@@ -2,6 +2,9 @@ import {
   canonicalWalletTransaction,
   sha256Hex as walletSha256
 } from "../wallets/crypto";
+import {WalletTransactionSchema} from '../wallets/validation';
+import {hasWalletPermission} from '../access/repository';
+import {assessAndTighten} from '../risk/tighten';
 import {evaluateWalletTransaction} from "../wallets/policy";
 import {
   getWallet,
@@ -44,6 +47,8 @@ function assertRequest(input:any):AuthorizeRequest{
   }
 
   const tx=input.transaction;
+  const parsedTx=WalletTransactionSchema.safeParse(tx);
+  if(!parsedTx.success) throw new Error('INVALID_TRANSACTION');
 
   if(!tx || typeof tx!=="object")
     throw new Error("MISSING_TRANSACTION");
@@ -164,6 +169,8 @@ export async function authorizeTransaction(
     throw new Error("AUTH_SIGNING_SECRET_NOT_CONFIGURED");
 
   const input=assertRequest(rawInput);
+  if(!await hasWalletPermission(env.DATABASE_URL,input.walletId,`api:${client.clientId}`,'authorize')||
+     !await hasWalletPermission(env.DATABASE_URL,input.walletId,`api:${client.clientId}`,'read'))throw new Error('WALLET_NOT_FOUND');
 
   const previous=await findAuthorizationByIdempotency(
     env.DATABASE_URL,
@@ -197,10 +204,14 @@ export async function authorizeTransaction(
     throw new Error("QUOTE_HASH_MISMATCH");
   }
 
-  const evaluation=evaluateWalletTransaction(
+  const baseEvaluation=evaluateWalletTransaction(
     wallet,
     input.transaction
   );
+  const {evaluation}=await assessAndTighten(env.DATABASE_URL,{
+    sessionId:`api:${client.clientId}:${input.idempotencyKey}`,walletId:wallet.walletId,agentId:input.agentId,
+    merchant:input.merchant,amount:input.transaction.amount,currency:input.transaction.currency,policyDecision:baseEvaluation.decision
+  },baseEvaluation);
 
   await recordDecision(
     env.DATABASE_URL,
@@ -348,6 +359,8 @@ export async function verifyStoredAuthorization(
 
   if(String(row.decision)!=="ALLOW")
     return {valid:false,reason:"AUTHORIZATION_NOT_ALLOWED"};
+  if(!await hasWalletPermission(env.DATABASE_URL,String(row.wallet_id),`api:${client.clientId}`,'authorize'))
+    return {valid:false,reason:'WALLET_ACCESS_REVOKED'};
 
   return {
     valid:true,

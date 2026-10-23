@@ -4,6 +4,7 @@ import type {
   CommerceProduct,
   CommerceSearchQuery
 } from "./types";
+import {validMoney} from '../wallets/validation';
 
 export type ShopifyConnectorConfig = {
   storeDomain:string;
@@ -50,11 +51,13 @@ function chooseVariant(product:any){
     ? product.variants.nodes
     : [];
 
-  const available=variants.filter((v:any)=>v?.availableForSale!==false);
+  const available=variants.filter((v:any)=>v?.availableForSale===true);
   const pool=available.length?available:variants;
 
   return pool
-    .filter((v:any)=>Number.isFinite(Number(v?.price?.amount)))
+    .filter((v:any)=>typeof v?.price?.amount==='string'
+      && /^\d+(?:\.\d+)?$/.test(v.price.amount)
+      && validMoney(Number(v.price.amount),v.price.currencyCode))
     .sort(
       (a:any,b:any)=>
         Number(a.price.amount)-Number(b.price.amount)
@@ -102,8 +105,9 @@ export function normalizeShopifyProduct(
     category:String(raw.productType||"uncategorized"),
     merchant:String(merchantName||`Shopify · ${storeDomain}`),
     price,
-    currency:String(variant.price.currencyCode||"INR").toUpperCase(),
-    quantityAvailable:variant.availableForSale===false?0:1,
+    currency:variant.price.currencyCode,
+    quantityAvailable:variant.availableForSale===true?1:0,
+    source:{provider:'shopify',marketplaceId:storeDomain,listingId:String(raw.id),payeeId:storeDomain,payeeType:'SHOPIFY_STORE'},
     features,
     productUrl:onlineStoreUrl,
     imageUrl:raw?.featuredImage?.url?String(raw.featuredImage.url):undefined,
@@ -299,7 +303,7 @@ export class ShopifyStorefrontConnector implements CommerceConnector {
 
     const variant=data?.node;
     const product=variant?.product;
-    if(!variant||!product) return null;
+    if(!variant||!product||String(variant.id)!==id) return null;
 
     // Inject the exact requested variant into the same normalizer shape.
     const shape={

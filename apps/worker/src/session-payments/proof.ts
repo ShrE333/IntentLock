@@ -10,8 +10,9 @@ import {
   persistProofReceipt,
   setSessionProofReceipt
 } from "./repository";
-import {buildProofHash,signProofHash} from "./crypto";
+import {buildProofHash,signProofHash,verifyReceiptIntegrity} from "./crypto";
 import {appendSessionAuditEvent} from "./audit";
+import {getRecipientSettlement,recipientProof} from './recipient-evidence';
 
 export async function createProofReceipt(db:string,signingSecret:string,sessionId:string){
   const existing=await getProofReceipt(db,sessionId);
@@ -31,6 +32,8 @@ export async function createProofReceipt(db:string,signingSecret:string,sessionI
   const payment=await getSessionPayment(db,sessionId);
   if(!payment||payment.status!=="COMPLETED")
     throw new Error("CAPTURED_PAYMENT_RECORD_NOT_FOUND");
+  const recipientEvidence=payment.provider==='paypal'?await getRecipientSettlement(db,sessionId):null;
+  if(payment.provider==='paypal'&&(!payment.expectedRecipient||!recipientEvidence))throw new Error('VERIFIED_PROVIDER_RECIPIENT_REQUIRED');
 
   const ledger:any=await getWalletLedgerForSession(db,sessionId);
   if(!ledger) throw new Error("WALLET_SPEND_LEDGER_NOT_FOUND");
@@ -49,7 +52,8 @@ export async function createProofReceipt(db:string,signingSecret:string,sessionI
   const paymentContext=session.selectedProduct.authorizationContext??null;
 
   const payload={
-    version:"intentlock-proof-v1.3",
+    version:payment.provider==='paypal'?"intentlock-proof-v1.4":"intentlock-proof-v1.3",
+    ...(payment.expectedRecipient&&recipientEvidence?{recipientVerification:recipientProof(payment.expectedRecipient,recipientEvidence)}:{}),
     generatedAt:new Date().toISOString(),
 
     session:{
@@ -158,16 +162,42 @@ export async function createProofReceipt(db:string,signingSecret:string,sessionI
   return receipt;
 }
 
-export async function getVerifiedProofReceipt(db:string,sessionId:string){
+export async function getVerifiedProofReceipt(db:string,sessionId:string,signingSecret?:string){
   const receipt=await getProofReceipt(db,sessionId);
   if(!receipt) return null;
 
   const rows=await getAuditEvents(getDb({DATABASE_URL:db}),sessionId);
   const auditVerification=await verifyAuditRows(rows);
+  const integrity=await verifyReceiptIntegrity(receipt,signingSecret);
+  const evidenceHeadValid=Boolean(receipt.evidenceAuditHeadHash)&&rows.some(row=>row.event_hash===receipt.evidenceAuditHeadHash)&&
+    (receipt.payload as any)?.audit?.evidenceHeadHash===receipt.evidenceAuditHeadHash;
+  const receiptIdentityValid=(receipt.payload as any)?.session?.sessionId===sessionId&&receipt.sessionId===sessionId&&
+    (receipt.payload as any)?.wallet?.walletId===receipt.walletId;
+  const payload=receipt.payload as any;
+  const paypal=payload?.payment?.provider==='paypal';
+  let recipientVerified=false;
+  if(paypal&&payload?.recipientVerification){
+    try{
+      const evidence=await getRecipientSettlement(db,sessionId);
+      recipientVerified=Boolean(evidence)&&payload.recipientVerification.status==='VERIFIED'
+        &&Boolean(evidence.expected_recipient)&&Object.keys(evidence.expected_recipient).every(k=>payload.recipientVerification.expected?.[k]===evidence.expected_recipient[k])
+        &&payload.wallet?.walletId===evidence.wallet_id
+        &&payload.payment?.providerOrderId===evidence.order_id&&payload.payment?.providerAuthorizationId===evidence.authorization_id&&payload.payment?.providerCaptureId===evidence.capture_id
+        &&payload.recipientVerification.evidenceId===String(evidence.observation_id)
+        &&payload.recipientVerification.expected?.fingerprint===evidence.expected_fingerprint
+        &&payload.recipientVerification.actualMerchantId===evidence.actual_merchant_id
+        &&payload.recipientVerification.expected?.paypalMerchantId===evidence.actual_merchant_id
+        &&payload.recipientVerification.environment===evidence.environment;
+    }catch{recipientVerified=false;}
+  }
+  const integrityVerified=integrity.payloadHashValid&&integrity.signatureValid&&auditVerification.valid&&evidenceHeadValid&&receiptIdentityValid;
 
   return {
     receipt,
     verification:{
+      ...integrity,evidenceHeadValid,receiptIdentityValid,
+      verified:integrityVerified&&(!paypal||recipientVerified),integrityVerified,recipientVerified,
+      recipientStatus:paypal?(recipientVerified?'VERIFIED':'LEGACY_OR_UNVERIFIED'):'NOT_APPLICABLE',
       auditChainValid:auditVerification.valid,
       checkedEvents:auditVerification.checkedEvents,
       currentAuditHeadHash:auditVerification.valid?auditVerification.headHash??null:null,

@@ -166,7 +166,7 @@ export default function SecurityLabPage() {
           </div>
         )}
 
-        {result && (
+        {result != null && (
           <article className="card resultCard">
             <div className="cardHeader">
               <div>

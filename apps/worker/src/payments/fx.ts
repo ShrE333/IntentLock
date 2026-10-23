@@ -1,4 +1,5 @@
 import type {FxQuote} from "./context-types";
+import {validMoney,validCurrency} from '../wallets/validation';
 
 export type FxEnv={
   FX_PROVIDER?:string;
@@ -75,6 +76,7 @@ export async function createFxQuote(
   fetcher:typeof fetch=globalThis.fetch.bind(globalThis)
 ):Promise<FxQuote|null>{
   const from=norm(fromCurrency),to=norm(toCurrency);
+  if(!validMoney(fromAmount,from)||!validCurrency(to))throw new Error('FX_INVALID_FINANCIAL_INPUT');
   if(from===to) return null;
   if(!Number.isFinite(fromAmount)||fromAmount<=0) throw new Error("FX_INVALID_AMOUNT");
 

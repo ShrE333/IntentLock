@@ -7,7 +7,7 @@ import {getJson} from "../../lib";
 
 type ProofResponse={
   receipt:{receiptId:string;sessionId:string;walletId:string;proofHash:string;proofSignature:string;evidenceAuditHeadHash:string|null;payload:any;createdAt:string;};
-  verification:{auditChainValid:boolean;checkedEvents:number;currentAuditHeadHash:string|null;evidenceAuditHeadHash:string|null;proofHash:string;signaturePresent:boolean;};
+  verification:{verified:boolean;integrityVerified?:boolean;recipientVerified?:boolean;payloadHashValid:boolean;signatureValid:boolean;evidenceHeadValid:boolean;auditChainValid:boolean;checkedEvents:number;currentAuditHeadHash:string|null;evidenceAuditHeadHash:string|null;proofHash:string;signaturePresent:boolean;};
 };
 const money=(n:number,currency?:string|null)=>{
   const code=String(currency??"").trim().toUpperCase();
@@ -48,12 +48,13 @@ export default function ProofReceiptPage(){
   const paymentCurrency=String(p?.payment?.currency??"USD");
   const walletCurrency=String(p?.wallet?.currency??p?.walletSpend?.currency??paymentCurrency);
   const fx=p?.paymentContext?.fxQuote;
+  const fullyVerified=data?.verification.verified===true&&(p?.payment?.provider!=='paypal'||data?.verification.recipientVerified===true);
 
   return <Shell><div className="page">
     <header className="pageHeader"><div><div className="eyebrow">CRYPTOGRAPHIC PURCHASE EVIDENCE</div><h1>Proof Receipt</h1><p>One receipt binds merchant presentment, wallet authority, country context, FX quote, verified settlement and the audit chain.</p></div><span className="sessionIdBadge">{sessionId}</span></header>
     {busy&&<div className="alert alertInfo">Loading proof receipt…</div>}{error&&<div className="alert alertError">{error}</div>}
     {data&&<div className="proofPage">
-      <section className="proofHero"><div><span className="miniLabel">INTENTLOCK VERIFIED PURCHASE</span><h2>{data.receipt.receiptId}</h2><p>Generated only after the payment provider webhook is verified and the wallet ledger is applied exactly once.</p></div><div className="proofStatus"><strong>{data.verification.auditChainValid?"VERIFIED":"INVALID"}</strong><span>{data.verification.checkedEvents} audit events checked</span></div></section>
+      <section className="proofHero"><div><span className="miniLabel">{fullyVerified?(p.recipientVerification?.sandbox?"VERIFIED SANDBOX PAYMENT":"VERIFIED PAYMENT EVIDENCE"):"RECIPIENT OR RECEIPT UNVERIFIED"}</span><h2>{data.receipt.receiptId}</h2><p>This receipt records payment evidence. It does not establish a merchant checkout order or fulfillment.</p>{p.recipientVerification?.sandbox&&<p>PayPal Sandbox transaction with test funds.</p>}</div><div className="proofStatus"><strong>{fullyVerified?"VERIFIED":"UNVERIFIED"}</strong><span>{data.verification.checkedEvents} audit events checked</span></div></section>
 
       <section className="proofGrid">
         <ProofCard title="Merchant Presentment"><Row label="Product" value={p.product?.title}/><Row label="Merchant" value={`${p.product?.merchant??"-"} · ${p.paymentContext?.merchantCountry??p.product?.merchantCountry??"--"}`}/><Row label="Buyer country" value={p.paymentContext?.buyerCountry??p.wallet?.countryCode}/><Row label="Checkout amount" value={money(Number(p.payment?.amount??0),paymentCurrency)}/></ProofCard>
@@ -67,10 +68,11 @@ export default function ProofReceiptPage(){
         <ProofCard title={provider}><Row label="Provider" value={provider}/><Row label="Order" value={p.payment?.providerOrderId}/><Row label="Authorization" value={p.payment?.providerAuthorizationId??"N/A"}/><Row label="Capture / Payment" value={p.payment?.providerCaptureId}/><Row label="Provider amount" value={money(Number(p.payment?.amount??0),paymentCurrency)}/><Row label="Status" value={p.payment?.status}/><Row label="Captured state source" value={p.payment?.capturedStateSource}/><Row label="Webhook signature" value={p.payment?.webhookSignatureVerified?"VERIFIED":"NOT VERIFIED"}/></ProofCard>
       </section>
 
+      <ProofCard title="Payment recipient"><Row label="Expected PayPal merchant" value={p.recipientVerification?.expected?.paypalMerchantId??"Not bound in this receipt"}/><Row label="Provider recipient" value={data.verification.recipientVerified?p.recipientVerification?.actualMerchantId:"Unverified"}/><Row label="Environment" value={p.recipientVerification?.environment??"Historical / unknown"}/></ProofCard>
       <section className="proofCryptography"><div className="sectionTitleRow"><div><span className="miniLabel">CRYPTOGRAPHIC EVIDENCE</span><h2>Integrity Proof</h2></div></div>
         <CryptoRow label="Exact Quote SHA-256" value={p.authorization?.quoteHash??"-"}/><CryptoRow label="Proof SHA-256" value={data.receipt.proofHash}/><CryptoRow label="HMAC Proof Signature" value={data.receipt.proofSignature}/><CryptoRow label="Evidence Audit Head" value={data.receipt.evidenceAuditHeadHash??"-"}/>
       </section>
-      <section className="proofChecks"><Check ok>Intent Wallet authority recorded</Check><Check ok>Merchant amount + wallet amount bound</Check><Check ok={!p.paymentContext?.fxBound||Boolean(fx?.quoteId)}>FX quote bound when currencies differ</Check><Check ok>Provider webhook signature verified</Check><Check ok>Wallet spend ledger applied once</Check><Check ok={data.verification.auditChainValid}>Tamper-evident audit chain valid</Check><Check ok={data.verification.signaturePresent}>Proof receipt signed</Check></section>
+      <section className="proofChecks"><Check ok={data.verification.integrityVerified===true}>Intent Wallet authority recorded</Check><Check ok={data.verification.integrityVerified===true}>Merchant amount + wallet amount bound</Check><Check ok={data.verification.integrityVerified===true&&(!p.paymentContext?.fxBound||Boolean(fx?.quoteId))}>FX quote bound when currencies differ</Check><Check ok={data.verification.integrityVerified===true&&Boolean(p.payment?.webhookSignatureVerified)}>Provider webhook signature verified</Check><Check ok={data.verification.integrityVerified===true&&Boolean(p.walletSpend?.ledgerId)}>Wallet spend ledger applied once</Check>{p.payment?.provider==='paypal'&&<Check ok={data.verification.recipientVerified===true}>Receiving merchant verified</Check>}<Check ok={data.verification.auditChainValid}>Tamper-evident audit chain valid</Check><Check ok={data.verification.signatureValid}>Proof receipt signed</Check></section>
     </div>}
   </div></Shell>;
 }

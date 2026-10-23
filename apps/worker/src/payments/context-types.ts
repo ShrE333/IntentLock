@@ -36,4 +36,5 @@ export type PaymentAuthorizationContext = {
   // V11.2 PayeeLock: structured payee identity is bound into the exact
   // authorization context and revalidated before money moves.
   payeeLock?:PayeeLockBinding;
+  recipient?:import('./recipient-binding').RecipientBinding;
 };

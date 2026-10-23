@@ -1,4 +1,5 @@
 import type {RefundPolicyInput,RefundPolicyResult} from "./types";
+import {validMoney} from '../wallets/validation';
 
 const EPS=0.000001;
 const roundMoney=(value:number)=>Math.round((value+Number.EPSILON)*100)/100;
@@ -22,7 +23,7 @@ export function evaluateRefundPolicy(input:RefundPolicyInput):RefundPolicyResult
     violations.push("REFUND_PROVIDER_NOT_SUPPORTED");
     reasons.push("V11.4 executes refunds through the PayPal capture refund API only.");
   }
-  if(!Number.isFinite(input.requestedAmount)||input.requestedAmount<=0){
+  if(!validMoney(input.requestedAmount,requestedCurrency)){
     violations.push("INVALID_REFUND_AMOUNT");
     reasons.push("Refund amount must be greater than zero.");
   }

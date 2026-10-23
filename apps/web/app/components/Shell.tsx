@@ -1,5 +1,6 @@
 'use client';
 import Link from 'next/link';
+import {startNewDemo} from '../demo-access';
 import {usePathname} from 'next/navigation';
 import type {ReactNode} from 'react';
 import '../intentlock-design.css';
@@ -40,8 +41,8 @@ export function Shell({children}:{children:ReactNode}){
  const pathname=usePathname();
  const current=[...primary,...secondary].find(p=>pathname===p.href||pathname.startsWith(p.href+'/'))?.label??'Control plane';
  return <div className="il-shell"><aside className="il-sidebar"><div className="il-sidebar-brand"><Brand/><span className="il-sidebar-caption">FINANCIAL CONTROL PLANE</span></div>
-  <div className="il-sidebar-status"><span className="il-status-dot"/>PAYPAL SANDBOX</div>
+  <div className="il-sidebar-status"><span className="il-status-dot"/>DEMONSTRATION</div>
   <nav aria-label="Product navigation" className="il-side-links"><span className="il-nav-overline">PRODUCT</span>{primary.map(p=><Link key={p.href} href={p.href} className={`il-side-link ${pathname===p.href||pathname.startsWith(p.href+'/')?'is-active':''}`} aria-current={pathname===p.href?'page':undefined}><Icon name={p.icon}/><span>{p.label}</span></Link>)}<span className="il-nav-overline il-nav-overline--second">EXPLORE</span>{secondary.map(p=><Link key={p.href} href={p.href} className={`il-side-link ${pathname===p.href||pathname.startsWith(p.href+'/')?'is-active':''}`} aria-current={pathname===p.href?'page':undefined}><Icon name={p.icon}/><span>{p.label}</span></Link>)}</nav>
   <div className="il-side-footer"><span>REASONING ≠ AUTHORITY</span><p>Verified payment evidence is the source of settlement truth.</p><a target="_blank" rel="noreferrer" href="https://github.com/ShrE333/IntentLock">GitHub repository ↗</a></div>
- </aside><div className="il-workspace"><header className="il-appbar"><div><span className="il-eyebrow">INTENTLOCK / PRODUCT</span><strong>{current}</strong></div><div className="il-appbar-right"><span className="il-env"><span className="il-status-dot"/> PayPal sandbox</span><Link href="/" className="il-appbar-overview">Overview</Link></div></header><main className="il-app-content">{children}</main></div></div>
+ </aside><div className="il-workspace"><header className="il-appbar"><div><span className="il-eyebrow">INTENTLOCK / PRODUCT</span><strong>{current}</strong></div><div className="il-appbar-right"><span className="il-env"><span className="il-status-dot"/> Payment control</span><Link href="/" className="il-appbar-overview">Overview</Link><button type="button" onClick={()=>{void startNewDemo();}}>New sandbox session</button></div></header><main className="il-app-content">{children}</main></div></div>
 }

@@ -1,4 +1,6 @@
-import {CORS_ALLOWED_HEADERS,globalPreflightResponse} from "./http/cors";
+import {CORS_ALLOWED_HEADERS,globalPreflightResponse,originAllowed,applyCors} from "./http/cors";
+import {secureFinancialRequest} from './access/gate';
+import {identityOf} from './access/identity';
 import { handleRiskRoutes } from "./risk/routes";
 import { handlePurchaseQueue } from "./queue/purchase-jobs";
 import { handleAuthorizeRoutes } from "./authorize/routes";
@@ -85,7 +87,7 @@ function approvalSecret(env: AppEnv): string {
   return secret;
 }
 
-export default {
+const worker = {
   async queue(batch:any, env:any, ctx:any) {
     return handlePurchaseQueue(batch,env,ctx);
   },
@@ -93,7 +95,7 @@ export default {
   async fetch(request: Request, rawEnv: Env): Promise<Response> {
     const env = rawEnv as AppEnv;
 
-    if (request.method === "OPTIONS") return globalPreflightResponse();
+    if (request.method === "OPTIONS") return globalPreflightResponse(request,env as AppEnv & {CORS_ALLOWED_ORIGINS?:string});
 
     const url = new URL(request.url);
 
@@ -116,7 +118,9 @@ export default {
     // V10.6 must run before the legacy V7 Razorpay webhook.
     // It handles PurchaseSession-linked payments and returns null for legacy payments.
     const sessionPaymentRouteResponse = await handleSessionPaymentRoutes(
-      request.clone(),
+      // Generated Cloudflare clone() loses the source Request's default Cf type.
+      // Cloning preserves the request; this narrows only that declaration defect.
+      request.clone() as Request,
       env,
       url
     );
@@ -242,7 +246,7 @@ export default {
         const intent = await parseIntent(env.AI, body.message);
         const sql = getDb(env);
 
-        await persistIntent(sql, intent);
+        await persistIntent(sql, intent,identityOf(env)?.kind==='ops'?undefined:identityOf(env)?.principalId);
         await appendAuditEvent(sql, intent.id, "INTENT_CREATED", {
           intent,
           source: "workers-ai",
@@ -654,6 +658,16 @@ export default {
     }
 
     return json({ error: "NOT_FOUND" }, 404);
+  }
+};
+
+export default {
+  ...worker,
+  async fetch(request:Request,rawEnv:Env):Promise<Response>{
+    const corsEnv=rawEnv as Env & {CORS_ALLOWED_ORIGINS?:string};
+    if(!originAllowed(request,corsEnv))return new Response(null,{status:403,headers:{vary:'Origin'}});
+    const response=await secureFinancialRequest(request,rawEnv,async(r,e)=>worker.fetch(r,e));
+    return applyCors(request,response,corsEnv);
   }
 };
 
