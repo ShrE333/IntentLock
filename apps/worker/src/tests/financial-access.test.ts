@@ -34,6 +34,19 @@ function request(path:string,token:string|null=tokens.a,body?:unknown,nonce=cryp
 }
 const call=(r:Request,e=env)=>secureFinancialRequest(r,e,next);
 describe('financial HTTP ownership boundary',()=>{
+ it('allows flagged MCP discovery only on the owned read-only search endpoint',async()=>{
+   const enabled={...env,SHOPIFY_GLOBAL_CATALOG_ENABLED:'true'};
+   const body={walletId:'wallet-a',connectorId:'shopify-global-catalog',query:'headphones'};
+   expect((await call(request('/api/commerce/search',tokens.a,body))).status).toBe(403);
+   expect((await call(request('/api/commerce/search',tokens.a,body),enabled)).status).toBe(200);
+   expect((await call(request('/api/sessions',tokens.a,body),enabled)).status).toBe(403);
+ });
+ it('rate-limits MCP discovery before dispatch without relaxing wallet ownership',async()=>{
+   vi.mocked(repo.rateLimit).mockImplementation(async(_db,key)=>!key.startsWith('catalog:'));
+   const enabled={...env,SHOPIFY_GLOBAL_CATALOG_ENABLED:'true'};
+   expect((await call(request('/api/commerce/search',tokens.a,{walletId:'wallet-a',connectorId:'shopify-global-catalog',query:'headphones'}),enabled)).status).toBe(429);
+   expect(next).not.toHaveBeenCalled();
+ });
  it.each(['/api/wallets','/api/sessions','/api/sessions/session-a/proof','/api/audit/session-a','/api/trust-center/overview'])('requires authentication for %s',async path=>{
    expect((await call(request(path,null))).status).toBe(401);expect(next).not.toHaveBeenCalled();
  });

@@ -105,6 +105,13 @@ export function evaluateWalletTransaction(
     }
   }
 
+  // No current adapter independently attests product condition. Merchant text,
+  // model inference and browser assertions cannot clear a strict condition rule.
+  if(wallet.excludedConditions?.length){
+    violations.push('PRODUCT_CONDITION_UNVERIFIED');
+    reasons.push('Required product condition cannot be independently verified; excluded: '+wallet.excludedConditions.join(', ')+'.');
+  }
+
   if(violations.length){
     return {decision:"BLOCK",violations,reasons,remainingAuthority:remaining,requestedAmount:tx.amount,additionalAuthorityRequired:0,canAutoExecute:false,requiresHumanApproval:false};
   }

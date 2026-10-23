@@ -1,0 +1,24 @@
+.commercePage { min-width: 0; width: 100%; }
+.commercePage .commerceSearchGrid { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); align-items: end; gap: 14px; }
+.commercePage .commerceSearchGrid label { display: grid; gap: 6px; min-width: 0; }
+.commercePage .commerceSearchGrid input,.commercePage .commerceSearchGrid select { width: 100%; min-width: 0; }
+.commercePage .commerceQuery { grid-column: 1 / -1; }
+.commercePage .connectorStrip,.commercePage .resultCounts { display: flex; flex-wrap: wrap; gap: 12px; margin: 16px 0; }
+.commercePage .connectorChip { display: grid; gap: 4px; padding: 12px; border: 1px solid var(--il-border); border-radius: 8px; }
+.commercePage .connectorChip span,.commercePage .productMeta,.commercePage .merchantName { font-size: 12px; color: var(--il-muted); overflow-wrap: anywhere; }
+.commercePage .resultsHeader { display: flex; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.commercePage .commerceGrid { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,320px),1fr)); gap: 18px; }
+.commercePage .commerceCard { min-width: 0; border: 1px solid var(--il-border); border-radius: 10px; padding: 20px; background: white; }
+.commercePage .commerceCardTop { display: flex; justify-content: space-between; gap: 12px; }
+.commercePage .commerceCardTop > div { min-width: 0; }
+.commercePage .commerceCard h3 { overflow-wrap: anywhere; }
+.commercePage .commerceDecision { flex-shrink: 0; font-size: 12px; font-weight: 700; }
+.commercePage .commercePrice { font-size: 26px; font-weight: 650; margin: 14px 0; }
+.commercePage .quoteBinding { display: grid; min-width: 0; gap: 9px; border: 1px solid var(--il-border); padding: 12px; border-radius: 7px; margin: 14px 0; font-size: 12px; }
+.commercePage .quoteBinding code,.commercePage .quoteBinding span { min-width: 0; white-space: normal; overflow-wrap: anywhere; }
+.commercePage .merchantMessage { padding: 12px; background: var(--il-paper); border-radius: 7px; margin: 12px 0; }
+.commercePage .merchantMessageHeader { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; font-size: 10px; }
+.commercePage .merchantMessage p,.commercePage .policyBox p { font-size: 12px; overflow-wrap: anywhere; }
+.commercePage .featureRow { display: flex; flex-wrap: wrap; gap: 8px; }
+@media (max-width: 700px) { .commercePage .commerceSearchGrid { grid-template-columns: minmax(0,1fr); } }
+@media (min-width: 1100px) { .commercePage .commerceSearchGrid { grid-template-columns: minmax(0,1fr) minmax(0,1fr) minmax(0,2fr) auto; } .commercePage .commerceQuery { grid-column: auto; } }

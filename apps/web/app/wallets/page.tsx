@@ -1,6 +1,7 @@
 "use client";
 
 import {useEffect,useMemo,useState} from "react";
+import {WalletAuthorityComposer} from '../components/WalletAuthorityComposer';
 import {Shell} from "../components/Shell";
 import {getJson,postJson} from "../lib";
 
@@ -8,7 +9,7 @@ type Wallet={
   walletId:string;name:string;countryCode:string;currency:string;totalAuthority:number;spentAmount:number;reservedAmount?:number;
   autoBuyLimit:number;maxSingleTransaction:number;allowedCategories:string[];
   allowedBrands:string[];blockedBrands:string[];requiredFeatures:string[];
-  validUntil:string;status:"ACTIVE"|"REVOKED";
+  excludedConditions?:string[];validUntil:string;status:"ACTIVE"|"REVOKED";
 };
 
 type Evaluation={
@@ -126,6 +127,8 @@ export default function WalletsPage(){
       <p>IntentLock converts the merchant quote into wallet authority, hashes the FX facts into the authorization, then selects a payment rail by capability.</p>
     </div></section>
 
+    <WalletAuthorityComposer onCreated={()=>{void load();}}/>
+
     <div className="walletTopGrid">
       <article className="card">
         <div className="cardHeader"><div><h2>Create Autonomy Mandate</h2><p>Define the owner context and exact spending authority.</p></div></div>
@@ -156,6 +159,8 @@ export default function WalletsPage(){
       </article>
     </div>
 
+    {!!selected?.excludedConditions?.length&&<div className="alert alertInfo">This wallet requires independently verified product condition. Current catalog adapters cannot establish that evidence, so purchases remain blocked.</div>}
+
     {selected&&<section className="walletDecisionGrid">
       <article className="card"><div className="cardHeader"><div><span className="miniLabel">SELECTED WALLET</span><h2>{selected.name}</h2></div><span className="pill pillSuccess">{selected.countryCode} · {selected.status}</span></div>
         <div className="walletMetrics">
@@ -163,6 +168,7 @@ export default function WalletsPage(){
           <Metric label="Auto-Buy" value={`≤ ${money(selected.autoBuyLimit,selected.currency)}`} success/>
           <Metric label="Step-Up Zone" value={`${money(selected.autoBuyLimit,selected.currency)}–${money(selected.maxSingleTransaction,selected.currency)}`}/>
           <Metric label="Hard Ceiling" value={money(selected.maxSingleTransaction,selected.currency)}/>
+          <Metric label="Excluded Conditions" value={selected.excludedConditions?.join(", ")||"None"}/>
           <Metric label="Valid Until" value={new Date(selected.validUntil).toLocaleString()}/>
         </div>
       </article>

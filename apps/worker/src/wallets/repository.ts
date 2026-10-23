@@ -13,6 +13,7 @@ function mapWallet(r:any):IntentWallet{
     autoBuyLimit:num(r.auto_buy_limit), maxSingleTransaction:num(r.max_single_transaction),
     allowedCategories:arr(r.allowed_categories), allowedBrands:arr(r.allowed_brands),
     blockedBrands:arr(r.blocked_brands), requiredFeatures:arr(r.required_features),
+    excludedConditions:arr(r.excluded_conditions) as IntentWallet['excludedConditions'],
     validUntil:new Date(String(r.valid_until)).toISOString(),
     status:String(r.status) as "ACTIVE"|"REVOKED"
   };

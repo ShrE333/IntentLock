@@ -44,6 +44,7 @@ export async function handleSessionRoutes(request:Request,env:Env,url:URL):Promi
       const walletId=String(b.walletId??"");
       const prompt=String(b.prompt??"").trim();
       const connectorId=String(b.connectorId??"demo-marketplace");
+      if(connectorId==='shopify-global-catalog')return json({error:'COMMERCE_DISCOVERY_ONLY'},403);
       const channel=String(b.channel??"WEB").toUpperCase();
       if(!walletId) return json({error:"WALLET_ID_REQUIRED"},400);
       if(!prompt) return json({error:"PROMPT_REQUIRED"},400);

@@ -12,14 +12,22 @@ vi.mock('@neondatabase/serverless',()=>({neon:()=>{
  sql.query=async(query:string,values:unknown[])=>(await db.query(query,values)).rows;return sql;
 }}));
 import worker from '../src/index';
+import {catalogEnv,catalogFixture} from '../src/tests/shopify-mcp-fixture';
+import {SHOPIFY_CATALOG_ENDPOINT} from '../src/commerce/shopify-mcp';
 it('serves isolated browser policy and ownership handlers',async()=>{
  const files:string[]=JSON.parse(readFileSync(new URL('../db/release-order.json',import.meta.url),'utf8'));
  for(const file of files)await db.exec(readFileSync(new URL('../db/'+file,import.meta.url),'utf8'));
- vi.stubGlobal('fetch',()=>{throw new Error('BROWSER_BRIDGE_EXTERNAL_NETWORK_FORBIDDEN');});
- const env={DATABASE_URL:'isolated',DEMO_ACCESS_ENABLED:'true',PAYPAL_ENV:'sandbox',FX_PROVIDER:'static',APPROVAL_SIGNING_SECRET:'isolated-browser-signing-secret-only',CORS_ALLOWED_ORIGINS:'http://127.0.0.1:18748'};
+ vi.stubGlobal('fetch',async(input:RequestInfo|URL,init?:RequestInit)=>{
+  if(String(input)!==SHOPIFY_CATALOG_ENDPOINT)throw new Error('BROWSER_BRIDGE_EXTERNAL_NETWORK_FORBIDDEN');
+  const rpc=JSON.parse(String(init?.body)),fixture=catalogFixture();if(rpc.params.name==='lookup_catalog')fixture.products[0].variants[0].price.amount=6900;
+  return Response.json({jsonrpc:'2.0',id:rpc.id,result:{structuredContent:fixture}});
+ });
+ const env={...catalogEnv,NATURAL_LANGUAGE_WALLETS_ENABLED:'true',DATABASE_URL:'isolated',DEMO_ACCESS_ENABLED:'true',PAYPAL_ENV:'sandbox',FX_PROVIDER:'static',APPROVAL_SIGNING_SECRET:'isolated-browser-signing-secret-only',CORS_ALLOWED_ORIGINS:'http://127.0.0.1:18748'};
+ let stop=()=>{};const stopped=new Promise<void>(resolve=>{stop=resolve;});
  const server=createServer(async(req,res)=>{
   try{
    // Test fixture control, absent from production Worker routes.
+   if(req.url==='/__test/stop'&&req.method==='POST'){res.writeHead(204);res.end();setTimeout(stop,0);return;}
    if(req.url==='/__test/reset'&&req.method==='POST'){
     await db.exec('TRUNCATE intent_wallets CASCADE; TRUNCATE financial_resource_owners,financial_demo_capabilities,financial_access_rate_limits,financial_access_nonces');
     res.writeHead(204);res.end();return;
@@ -35,6 +43,7 @@ it('serves isolated browser policy and ownership handlers',async()=>{
  });
  await new Promise<void>(resolve=>server.listen(18747,'127.0.0.1',resolve));
  console.log('ISOLATED_BROWSER_BRIDGE_READY');
- await new Promise<void>(resolve=>{process.once('SIGTERM',resolve);process.once('SIGINT',resolve);});
- server.close();await db.close();
+ process.once('SIGTERM',stop);process.once('SIGINT',stop);
+ await stopped;
+ await new Promise<void>(resolve=>server.close(()=>resolve()));await db.close();
 });

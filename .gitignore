@@ -14,3 +14,6 @@ apps/web/playwright-report/
 Thumbs.db
 .vercel
 .env*
+
+# Disposable local validation infrastructure and screenshots
+.validation/

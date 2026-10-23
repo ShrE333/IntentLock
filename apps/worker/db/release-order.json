@@ -16,5 +16,6 @@
  "v11_4_post_purchase_guard.sql",
  "v11_4_4_financial_access.sql",
  "v11_4_5_wallet_reservations.sql",
- "v11_4_6_verified_recipient.sql"
+ "v11_4_6_verified_recipient.sql",
+ "v11_5_wallet_authority.sql"
 ]

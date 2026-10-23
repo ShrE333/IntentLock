@@ -14,6 +14,7 @@ export type IntentWallet = {
   allowedBrands: string[];
   blockedBrands: string[];
   requiredFeatures: string[];
+  excludedConditions?: ("NEW"|"USED"|"REFURBISHED")[];
   validUntil: string;
   status: "ACTIVE" | "REVOKED";
 };

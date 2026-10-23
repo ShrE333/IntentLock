@@ -1,3 +1,4 @@
+import {handleAuthorityRoutes} from './wallet-authority/routes';
 import {CORS_ALLOWED_HEADERS,globalPreflightResponse,originAllowed,applyCors} from "./http/cors";
 import {secureFinancialRequest} from './access/gate';
 import {identityOf} from './access/identity';
@@ -126,6 +127,8 @@ const worker = {
     );
     if (sessionPaymentRouteResponse) return sessionPaymentRouteResponse;
 
+    const authorityResponse=await handleAuthorityRoutes(request,env as Env & {NATURAL_LANGUAGE_WALLETS_ENABLED?:string},url);
+    if(authorityResponse)return authorityResponse;
     const walletRouteResponse = await handleWalletRoutes(request, env, url);
     if (walletRouteResponse) return walletRouteResponse;
 

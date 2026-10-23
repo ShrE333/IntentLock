@@ -73,3 +73,67 @@ test('wallet loading is distinct from an empty account and navigation works',asy
  await page.getByRole('navigation',{name:'Product navigation'}).getByRole('link',{name:'Architecture',exact:true}).click();
  await expect(page).toHaveURL(/\/how-it-works$/);
 });
+test('flagged Shopify catalog shows exact identity, price refresh and non-executable policy',async({page})=>{
+ await scenarioWallet(page);await page.goto('/commerce');
+ await page.getByLabel('Commerce Connector').selectOption('shopify-global-catalog');
+ await page.getByRole('button',{name:'Search Marketplace'}).click();
+ await expect(page.getByText('Exact price: 4900 USD minor units')).toBeVisible();
+ await expect(page.getByText('Exact variant: gid://shopify/ProductVariant/123')).toBeVisible();
+ await expect(page.getByText('Seller: gid://shopify/Shop/456 · merchant.myshopify.com')).toBeVisible();
+ await expect(page.getByText('Condition (inferred): new')).toBeVisible();
+ await expect(page.getByText('Live Shopify catalog discovery only.',{exact:false})).toBeVisible();
+ await page.getByRole('button',{name:'Refresh exact variant'}).click();
+ await expect(page.getByText('Exact price: 6900 USD minor units')).toBeVisible();
+ expect((await apiCall(page,'/api/wallets')).body.wallets[0].spentAmount).toBe(0);
+ expect(await page.evaluate(()=>document.documentElement.scrollWidth<=document.documentElement.clientWidth+2)).toBe(true);
+});
+
+test('natural-language wallet review edits, simulation and explicit confirmation preserve boundaries',async({page})=>{
+ await page.goto('/wallets');
+ const composer=page.getByRole('region',{name:'Describe your agent’s boundaries'});
+ await composer.getByRole('button',{name:'Use example'}).click();
+ await composer.getByRole('button',{name:'Compile draft'}).click();
+ await expect(composer.getByRole('heading',{name:'Review before authorization'})).toBeVisible();
+ await expect(composer.getByText('DRAFT / NOT AUTHORIZED',{exact:true})).toBeVisible();
+ expect((await apiCall(page,'/api/wallets')).body.wallets).toHaveLength(0);
+ await expect(composer.getByRole('button',{name:'Confirm and authorize wallet'})).toBeDisabled();
+ await composer.getByLabel('Excluded conditions:',{exact:false}).fill('none');
+ await expect(composer.getByRole('button',{name:'Confirm and authorize wallet'})).toHaveCount(0);
+ await composer.getByRole('button',{name:'Validate and preview exact policy'}).click();
+ await expect(composer.getByRole('heading',{name:'Review before authorization'})).toBeVisible();
+ await composer.getByLabel('Sample amount').fill('60');
+ await composer.getByLabel('Sample brand').fill('Sony');
+ await composer.getByLabel('Sample category').fill('electronics');
+ await composer.getByRole('button',{name:'Simulate policy'}).click();
+ await expect(composer.getByText('STEP-UP',{exact:true})).toBeVisible();
+ expect((await apiCall(page,'/api/wallets')).body.wallets).toHaveLength(0);
+ expect(await page.evaluate(()=>document.documentElement.scrollWidth<=document.documentElement.clientWidth+2)).toBe(true);
+ await page.screenshot({path:'.validation/wallet-authority-'+test.info().project.name+'.png',fullPage:true});
+ await composer.getByRole('checkbox').check();
+ await composer.getByRole('button',{name:'Confirm and authorize wallet'}).click();
+ await expect(composer.getByText('Wallet confirmed.',{exact:false})).toBeVisible();
+ const wallets=(await apiCall(page,'/api/wallets')).body.wallets;
+ expect(wallets).toHaveLength(1);expect(wallets[0].autoBuyLimit).toBe(50);expect(wallets[0].maxSingleTransaction).toBe(75);
+ expect((await apiCall(page,'/api/wallet-authority/history/'+wallets[0].walletId)).body.versions).toHaveLength(1);
+});
+test('incomplete natural language requests clarification and cannot silently authorize',async({page})=>{
+ await page.goto('/wallets');const composer=page.getByRole('region',{name:'Describe your agent’s boundaries'});
+ await composer.getByLabel('Your instructions').fill('Give my shopping agent 100 USD for one day. Allow Sony and Bose electronics. Auto limit 50 USD. No blocked brands. No required features. New only.');
+ await composer.getByRole('button',{name:'Compile draft'}).click();
+ await expect(composer.getByText('Please specify Hard transaction ceiling.',{exact:true})).toBeVisible();
+ await expect(composer.getByRole('button',{name:'Confirm and authorize wallet'})).toHaveCount(0);
+ await composer.getByRole('button',{name:'Validate and preview exact policy'}).click();
+ await expect(composer.getByRole('alert')).toContainText('Please explicitly specify');
+ expect((await apiCall(page,'/api/wallets')).body.wallets).toHaveLength(0);
+});
+test('compiler outage is recoverable and creates no authority',async({page})=>{
+ await page.goto('/wallets');const composer=page.getByRole('region',{name:'Describe your agent’s boundaries'});
+ await page.route('**/api/wallet-authority/compile',route=>route.fulfill({status:503,contentType:'application/json',body:'{"error":"WALLET_AUTHORITY_UNAVAILABLE"}'}));
+ await composer.getByRole('button',{name:'Use example'}).click();await composer.getByRole('button',{name:'Compile draft'}).click();
+ await expect(composer.getByRole('alert')).toContainText('WALLET_AUTHORITY_UNAVAILABLE');
+ await expect(composer.getByRole('button',{name:'Compile draft'})).toBeEnabled();
+ await page.route('**/api/wallet-authority/compile',route=>route.fulfill({status:200,contentType:'application/json',body:'{}'}));
+ await composer.getByRole('button',{name:'Compile draft'}).click();
+ await expect(composer.getByRole('alert')).toContainText('incomplete compilation');
+ await expect(composer.getByRole('button',{name:'Confirm and authorize wallet'})).toHaveCount(0);
+});

@@ -27,6 +27,7 @@ type EvaluatedCandidate={
 export async function runPurchaseSession(env:Env,sessionId:string){
   const session=await getSession(env.DATABASE_URL,sessionId);
   if(!session) throw new Error("SESSION_NOT_FOUND");
+  if(session.connectorId==='shopify-global-catalog')throw new Error('COMMERCE_DISCOVERY_ONLY');
   if(session.status!=='CREATED') throw new Error(`SESSION_NOT_RUNNABLE:${session.status}`);
   const wallet=await getWallet(env.DATABASE_URL,session.walletId);
   if(!wallet) throw new Error("WALLET_NOT_FOUND");

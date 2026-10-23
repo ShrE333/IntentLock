@@ -3,7 +3,7 @@ import {safeEqualText} from '../authorize/crypto';
 import {ACCESS_CONTEXT,AccessError,DEMO_SCOPES,hasScope,newDemoToken,sha256,type Identity,type Permission} from './identity';
 import * as store from './repository';
 
-export type FinancialAccessEnv={DATABASE_URL?:string;DEMO_ACCESS_ENABLED?:string;PAYPAL_ENV?:string;TRUSTOPS_ADMIN_TOKEN?:string;INTENTLOCK_ADMIN_KEY?:string};
+export type FinancialAccessEnv={DATABASE_URL?:string;DEMO_ACCESS_ENABLED?:string;PAYPAL_ENV?:string;TRUSTOPS_ADMIN_TOKEN?:string;INTENTLOCK_ADMIN_KEY?:string;SHOPIFY_GLOBAL_CATALOG_ENABLED?:string};
 const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:{'content-type':'application/json','cache-control':'no-store'}});
 const bearer=(r:Request)=>r.headers.get('authorization')?.match(/^Bearer ([^\s]+)$/i)?.[1]??r.headers.get('x-intentlock-key')??'';
 const sandbox=(env:FinancialAccessEnv)=>env.DEMO_ACCESS_ENABLED==='true'&&String(env.PAYPAL_ENV??'sandbox').toLowerCase()==='sandbox';
@@ -35,6 +35,8 @@ type Rule={scope:string;kind?:'wallet'|'session'|'refund'|'intent'|'audit'|'risk
 // Default deny: adding a financial route requires adding an explicit rule.
 export function accessRule(path:string,method:string):Rule|null{
  const post=method==='POST',get=method==='GET';let m:RegExpMatchArray|null;
+ if(['/api/wallet-authority/compile','/api/wallet-authority/preview','/api/wallet-authority/simulate','/api/wallet-authority/confirm'].includes(path)&&post)return {scope:'wallet:create'};
+ if((m=path.match(/^\/api\/wallet-authority\/history\/([^/]+)$/))&&get)return {scope:'financial:read',kind:'wallet',id:m[1],permission:'read'};
  if(path==='/api/wallets')return post?{scope:'wallet:create'}:get?{scope:'financial:read'}:null;
  if((m=path.match(/^\/api\/wallets\/([^/]+)\/evaluate$/))&&post)return {scope:'wallet:evaluate',kind:'wallet',id:m[1],permission:'authorize'};
  if((m=path.match(/^\/api\/wallets\/([^/]+)\/step-up\/[^/]+\/resolve$/))&&post)return {scope:'stepup:resolve',kind:'wallet',id:m[1],permission:'approve'};
@@ -126,13 +128,23 @@ export async function secureFinancialRequest<T extends FinancialAccessEnv>(reque
        if(body?.currency!=='USD'||body?.totalAuthority>100||body?.maxSingleTransaction>100||Date.parse(body?.validUntil)>Date.now()+86400000)throw new AccessError(403,'DEMO_AUTHORITY_LIMIT');
        if(!await store.rateLimit(db,`wallet:${identity.principalId}`,2,3600)||!await store.rateLimit(db,`wallet-ip:${ip}`,6,3600))throw new AccessError(429,'DEMO_WALLET_LIMIT');
      }
-     if((path==='/api/sessions'||path==='/api/commerce/search')&&request.method==='POST'&&body?.connectorId!=='paypal-demo-marketplace')throw new AccessError(403,'DEMO_CONNECTOR_ONLY');
+     if((path==='/api/sessions'||path==='/api/commerce/search')&&request.method==='POST'&&body?.connectorId!=='paypal-demo-marketplace'
+       &&!(path==='/api/commerce/search'&&body?.connectorId==='shopify-global-catalog'&&env.SHOPIFY_GLOBAL_CATALOG_ENABLED==='true'))throw new AccessError(403,'DEMO_CONNECTOR_ONLY');
      if(path==='/api/sessions'&&request.method==='POST'&&body?.channel&&body.channel!=='WEB')throw new AccessError(403,'DEMO_CHANNEL_ONLY');
      if(path==='/api/trust-center/reconciliation'&&url.searchParams.get('deep')==='1')throw new AccessError(403,'OPERATOR_REQUIRED');
      if(request.method==='POST'){
        if(!await store.rateLimit(db,`mutation:${identity.principalId}`,10,60))throw new AccessError(429,'DEMO_MUTATION_LIMIT');
        const nonce=request.headers.get('x-intentlock-request-id');if(!nonce||!/^[-a-zA-Z0-9_]{16,128}$/.test(nonce))throw new AccessError(400,'REQUEST_ID_REQUIRED');
        if(!await store.claimNonce(db,identity.principalId,nonce,identity.expiresAt!))throw new AccessError(409,'REQUEST_REPLAYED');
+     }
+   }
+   if(path==='/api/commerce/search'&&request.method==='POST'&&body?.connectorId==='shopify-global-catalog'){
+     if(!await store.rateLimit(db,`catalog:${identity.principalId}`,10,60)||!await store.rateLimit(db,'catalog:global',60,60))throw new AccessError(429,'SHOPIFY_CATALOG_RATE_LIMITED');
+   }
+   if(path.startsWith('/api/wallet-authority/')&&request.method==='POST'){
+     if(!await store.rateLimit(db,`wallet-compiler:${identity.principalId}`,6,60)||!await store.rateLimit(db,'wallet-compiler:global',60,60))throw new AccessError(429,'WALLET_COMPILER_RATE_LIMITED');
+     if(path==='/api/wallet-authority/confirm'&&identity.kind==='demo'){
+       if(!await store.rateLimit(db,`wallet:${identity.principalId}`,2,3600)||!await store.rateLimit(db,`wallet-ip:${ip}`,6,3600))throw new AccessError(429,'DEMO_WALLET_LIMIT');
      }
    }
    const effective={...env,[ACCESS_CONTEXT]:identity,...(identity.kind==='demo'?{PAYMENT_PROVIDER:'paypal',PAYPAL_ENV:'sandbox'}:{})};

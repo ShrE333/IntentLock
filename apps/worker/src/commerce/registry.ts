@@ -4,8 +4,9 @@ import {PayPalDemoMarketplaceConnector} from "./paypal-demo-connector";
 import {EbayBrowseConnector} from "./ebay-connector";
 import {HttpJsonCommerceConnector} from "./http-json-connector";
 import {ShopifyStorefrontConnector} from "./shopify-connector";
+import {ShopifyGlobalCatalogConnector,shopifyMcpEnabled,type ShopifyMcpEnv} from './shopify-mcp';
 
-export type CommerceEnv={
+export type CommerceEnv=ShopifyMcpEnv & {
   COMMERCE_CATALOG_URL?:string;
   SHOPIFY_STORE_DOMAIN?:string;
   SHOPIFY_STOREFRONT_PUBLIC_TOKEN?:string;
@@ -25,6 +26,7 @@ export function getCommerceConnectors(env:CommerceEnv):CommerceConnector[]{
     new PayPalDemoMarketplaceConnector(),
     new DemoMarketplaceConnector()
   ];
+  if(shopifyMcpEnabled(env))connectors.push(new ShopifyGlobalCatalogConnector(env));
 
   if(env.EBAY_CLIENT_ID&&env.EBAY_CLIENT_SECRET){
     connectors.push(new EbayBrowseConnector({
@@ -59,6 +61,7 @@ export function connectorStatus(env:CommerceEnv):CommerceConnectorInfo[]{
 
   return [
     ...active,
+    ...(!shopifyMcpEnabled(env)?[{id:'shopify-global-catalog',name:'Shopify Global Catalog MCP',kind:'SHOPIFY' as const,enabled:false,description:'Read-only live UCP discovery. Disabled by default; no merchant checkout.'}]:[]),
     ...(!ebayConfigured?[{
       id:"ebay-browse",name:"eBay Browse",kind:"EBAY" as const,
       enabled:false,description:"Live eBay Browse adapter. Configure EBAY_CLIENT_ID and EBAY_CLIENT_SECRET to enable it."
