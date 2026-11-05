@@ -71,10 +71,10 @@ export async function handleSessionPaymentRoutes(
   if(request.method==="GET" && url.pathname==="/api/payments/provider"){
     return json({
       mode:String(env.PAYMENT_PROVIDER??"auto"),
-      paypalEnvironment:String(env.PAYPAL_ENV??'sandbox').toLowerCase()==='live'?'live':'sandbox',
+      paypalEnvironment:env.PAYPAL_ENV??'sandbox',
       legacyDefault:activePaymentProvider(env),
       selection:"PER_TRANSACTION_CAPABILITY",
-      paypalConfigured:Boolean(env.PAYPAL_CLIENT_ID&&env.PAYPAL_CLIENT_SECRET&&env.PAYPAL_WEBHOOK_ID),
+      paypalConfigured:Boolean(env.PAYPAL_CLIENT_ID?.trim()&&env.PAYPAL_CLIENT_SECRET?.trim()&&env.PAYPAL_WEBHOOK_ID?.trim()),
       recipientMappingConfigured:recipientMappingConfigured(env),
       paypalReadiness:paypalReadiness(env),
       razorpayConfigured:Boolean(env.RAZORPAY_KEY_ID&&env.RAZORPAY_KEY_SECRET)

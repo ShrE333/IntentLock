@@ -43,7 +43,7 @@ describe('server-controlled recipient registry and trust boundary',()=>{
   expect(canonicalWalletTransaction({...tx,recipientFingerprint:(await syntheticBinding()).fingerprint})).not.toBe(old);
  });
  it('reports configuration only, without leaking IDs or implying connectivity',()=>{
-  expect(recipientMappingConfigured(syntheticEnv)).toBe(true);expect(recipientMappingConfigured({})).toBe(false);
+  expect(recipientMappingConfigured(syntheticEnv)).toBe(false);expect(recipientMappingConfigured(configured({catalogSellerId:"audiohub-sandbox"}))).toBe(true);expect(recipientMappingConfigured({})).toBe(false);
  });
  it('puts the exact approved merchant ID into purchase_units.payee rather than merchant prose',async()=>{
   const calls:Array<{url:string;init?:RequestInit}>=[];

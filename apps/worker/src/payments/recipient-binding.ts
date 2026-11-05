@@ -1,5 +1,6 @@
 import {sha256Hex} from '../wallets/crypto';
 import type {CommerceProduct} from '../commerce/types';
+import {paypalDemoCatalog} from '../commerce/paypal-demo-catalog';
 export type RecipientEnv={PAYPAL_ENV?:string;PAYPAL_ACCOUNT_MERCHANT_ID?:string;PAYPAL_MERCHANT_BINDINGS_JSON?:string};
 export type RecipientBinding={
  version:'intentlock-recipient-v1';provider:'paypal';environment:'sandbox'|'live';
@@ -52,5 +53,6 @@ export function assertExecutableCommerce(connectorId:string,environment:string){
 }
 export function recipientMappingConfigured(env:RecipientEnv){
  try{return registry(env).some(r=>r.environment===recipientEnvironment(env)&&r.integration==='DIRECT_MERCHANT'
-  &&r.connectorId==='paypal-demo-marketplace'&&r.paypalMerchantId===env.PAYPAL_ACCOUNT_MERCHANT_ID&&Date.parse(r.validUntil)>Date.now());}catch{return false;}
+  &&r.connectorId==='paypal-demo-marketplace'&&r.catalogProvider==='paypal-demo'
+  &&paypalDemoCatalog.some(p=>p.source?.payeeId===r.catalogSellerId)&&r.paypalMerchantId===env.PAYPAL_ACCOUNT_MERCHANT_ID&&Date.parse(r.validUntil)>Date.now());}catch{return false;}
 }

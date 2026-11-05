@@ -1,8 +1,8 @@
 import {describe, it, expect} from 'vitest';
 import {paypalReadiness} from '../session-payments/readiness';
 import {paypalReturnBaseUrl} from '../session-payments/providers/paypal';
-import {syntheticEnv} from './recipient-fixtures';
-const env = {...syntheticEnv, PAYPAL_CLIENT_ID:'isolated-client', PAYPAL_CLIENT_SECRET:'isolated-secret',
+import {syntheticEnv,syntheticMapping} from './recipient-fixtures';
+const env = {...syntheticEnv, PAYPAL_MERCHANT_BINDINGS_JSON:JSON.stringify([{...syntheticMapping,catalogSellerId:"audiohub-sandbox"}]), PAYPAL_CLIENT_ID:'isolated-client', PAYPAL_CLIENT_SECRET:'isolated-secret',
   PAYPAL_WEBHOOK_ID:'isolated-webhook', PAYPAL_RETURN_BASE_URL:'https://preview.example.test',
   APPROVAL_SIGNING_SECRET:'isolated-signing-secret-at-least-24', DATABASE_URL:'isolated-db'};
 describe('safe PayPal configuration diagnostics', () => {
