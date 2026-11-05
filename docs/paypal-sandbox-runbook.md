@@ -1,5 +1,107 @@
 # PayPal sandbox integration and release verification
 
+## Runner diagnosis and safe failure handling
+
+The old runner's first operation after `SANDBOX` was `POST /api/access/demo`.
+This writes a short-lived capability to the financial database; it is not a
+read-only OAuth check. A failure there occurs before any provider request.
+The old catch discarded its HTTP status and exception, so historical generic
+output cannot establish whether issuance failed with 401/403 (access), 429
+(issuance limits), 503 (disabled access/database/schema), or transport/TLS failure.
+Do not issue capabilities just to diagnose an environment when only read-only
+inspection is authorized. The corrected runner reports `demo_capability` and a
+closed-vocabulary code plus HTTP status. `ACCESS_CONTROL_UNAVAILABLE` can mean
+missing DB configuration, connectivity, or missing financial-access migrations;
+it deliberately does not expose database error text. Inspect authorized server
+logs/schema separately. Do not change financial records to manufacture success.
+
+The old result object did not itself prove the failure was pre-OAuth: its oauth
+field was never updated at all, and it logged session/wallet IDs only after order
+creation. The same all-NOT_TESTED output could arise at capability issuance,
+wallet/session creation, selection/binding checks, order creation (including
+provider OAuth), or approval URL validation. If independent operator evidence
+establishes pre-OAuth failure, the module-loader defect is still separate: the
+interactive runner never invoked sourceModule or the local OAuth helper. The
+exact historical failing request cannot be reconstructed from that output alone.
+The repaired runner logs session IDs as soon as available and distinguishes each
+stage. During order creation it reports OAuth as not independently observed,
+rather than incorrectly saying it was never attempted.
+
+The local OAuth helper had a separate reproducible implementation defect:
+`paypal.ts` imports `wallets/validation.ts`, which imports the bare package `zod`.
+Transpiling relatives into data URLs left `zod` unresolved, causing Node's
+`ERR_UNSUPPORTED_RESOLVE_REQUEST` before OAuth. The loader now resolves installed
+packages from the original source file and keeps source compilation in memory.
+The helper checks local credential presence first, then invokes the real provider
+implementation against the real sandbox OAuth endpoint. Deployed Cloudflare
+secrets do not populate local environment variables. Never copy credentials into
+command arguments, logs, source, or a terminal transcript.
+
+Diagnostics contain stage, allowlisted code, HTTP status and (when supplied by
+the corrected Worker) provider HTTP status. Unknown exceptions, provider bodies,
+database errors, stacks and authorization values are suppressed. The setup helper
+preserves the preceding safe diagnostic instead of replacing it with a generic
+failure. OAuth transport and module-loading failures have separate codes; a
+401/403 from OAuth is a real provider rejection, while one from the Worker is an
+access failure. A ready configuration does not attest either operation.
+
+The runner now validates local dedicated demo configuration before network work,
+requires a valid capability with a short future expiry, checks exactly USD 49,
+and validates the buyer return origin, session and order token before the
+separate AUTHORIZE confirmation. The return is correlation only; server/provider
+checks remain authoritative. A capability expiring during buyer approval stops
+the run; do not bootstrap a new identity and retry an ambiguous capture.
+
+After capture, the runner requires verified HMAC/recipient proof bound to the
+same wallet/session/order and USD 49 ledger entry, a COMMITTED reservation and
+zero reserved balance. COMMITTED means reserved authority was converted into the
+single ledger debit. It checks stable receipt/ledger identity after the explicitly
+confirmed duplicate capture request. It never resends captures after a transport
+failure, nor sends synthetic webhooks.
+
+Exit 1 means stopped/blocked; diagnostics identify the last stage. Exit 2 after
+successful financial observations means the complete E2E evidence is still
+pending: queue consumer acknowledgment and actual original-provider webhook
+redelivery are manual checks. `ok` from the injectable test function describes
+financial observations only; `complete` remains false. A final CAPTURED status
+does not establish queue acknowledgment. Configuration readiness also uses exit
+2 when blocked. Do not interpret any of these as a genuine full E2E pass.
+
+On Windows with npm.ps1 disabled, use `npm.cmd` without changing execution policy.
+The Worker has no `build` script; `npm.cmd --workspace apps/worker run dry-run:demo`
+is its available Wrangler bundle verification. The standalone OAuth helper is
+`node apps/worker/scripts/sandbox-tools.mjs oauth`, after securely supplying
+`PAYPAL_ENV=sandbox`, `PAYPAL_CLIENT_ID`, and `PAYPAL_CLIENT_SECRET` in that process.
+
+For the first authorized real run, verify database/queue isolation and merchant
+authorization, inspect the deployed source SHA, and run:
+
+```powershell
+npm.cmd --workspace apps/worker run check:demo
+npm.cmd --workspace apps/worker run check:paypal
+node apps/worker/scripts/sandbox-tools.mjs oauth
+npm.cmd --workspace apps/worker run test:sandbox -- --interactive
+```
+
+Only the last command creates financial resources. Type SANDBOX only when that
+work is authorized. Open its returned sandbox checkout with a separate buyer,
+paste the actual buyer return URL into the CLI without terminal recording, then
+confirm AUTHORIZE and CAPTURE 49.00 USD separately. Approve REPLAY only after
+verified settlement. Retain session/receipt/ledger identities in controlled
+operator evidence. Correlate original verified webhook evidence with the hosted
+202 enqueue response and consumer acknowledgment for the same payload hash.
+If a capture response is lost or settlement times out, preserve the reservation
+and investigate the existing transaction; never rerun the lifecycle blindly.
+
+Under separate permission, use PayPal's original-event resend facility to
+redeliver the same authenticated capture event, then use the owning capability
+to read session/payment/proof/wallet again. Require identical capture,
+receipt and ledger IDs, USD 49 spent, zero reserved, and no second ledger debit;
+collect queue acknowledgment logs for the redelivery. The runner intentionally
+leaves webhookReplay and queue pending until that external evidence is reviewed.
+Never fabricate transmission headers or equate a capture replay with a webhook
+replay. No local mocked regression establishes real provider verification.
+
 This runbook is for `intentlock-worker-demo` only. Never deploy the tracked
 production Wrangler configuration. No command here automatically deploys,
 merges, migrates a database, captures, refunds, or changes financial records.

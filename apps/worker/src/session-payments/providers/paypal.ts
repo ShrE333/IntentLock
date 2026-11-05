@@ -71,18 +71,19 @@ export async function getPayPalAccessToken(
   env:PayPalEnv,
   fetcher:FetchLike=globalThis.fetch.bind(globalThis)
 ){
-  if(!env.PAYPAL_CLIENT_ID || !env.PAYPAL_CLIENT_SECRET)
+  if(!env.PAYPAL_CLIENT_ID?.trim() || !env.PAYPAL_CLIENT_SECRET?.trim())
     throw new Error("PAYPAL_NOT_CONFIGURED");
 
-  const response=await fetcher(`${paypalBaseUrl(env)}/v1/oauth2/token`,{
+  const base=paypalBaseUrl(env);
+  const response=await fetcher(`${base}/v1/oauth2/token`,{
     method:"POST",
     headers:{
       authorization:authHeader(env.PAYPAL_CLIENT_ID,env.PAYPAL_CLIENT_SECRET),
       "content-type":"application/x-www-form-urlencoded",
       accept:"application/json"
     },
-    body:"grant_type=client_credentials"
-  });
+    body:"grant_type=client_credentials",redirect:'error',signal:AbortSignal.timeout(30000)
+  }).catch(()=>{throw new Error('OAUTH_TRANSPORT_FAILURE');});
 
   const body:any=await jsonOrText(response);
   if(!response.ok || !body?.access_token){

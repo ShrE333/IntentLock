@@ -3,6 +3,9 @@ import {fileURLToPath, pathToFileURL} from 'node:url';
 import {resolve, dirname} from 'node:path';
 import {execFileSync, spawnSync} from 'node:child_process';
 import ts from 'typescript';
+import {createRequire} from 'node:module';
+import {SafeSandboxError,safeDiagnostic} from './sandbox-diagnostics.mjs';
+export {safeDiagnostic} from './sandbox-diagnostics.mjs';
 
 export const workerRoot=fileURLToPath(new URL('../',import.meta.url));
 export const demoConfig=resolve(workerRoot,'wrangler.demo.jsonc');
@@ -11,15 +14,20 @@ export const requiredSecrets=['PAYPAL_CLIENT_ID','PAYPAL_CLIENT_SECRET','PAYPAL_
 
 // Import the actual pure Worker validators in memory; no secret-bearing modules on disk.
 export async function sourceModule(relative){
-  async function compile(path){
+  async function compile(path,ancestors=[]){
+    if(ancestors.includes(path))throw new Error('SOURCE_MODULE_CYCLE');
+    const require=createRequire(pathToFileURL(path));
     let code=ts.transpileModule(await readFile(path,'utf8'),{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.ESNext}}).outputText;
-    for(const match of [...code.matchAll(/from\s+['"](\.[^'"]+)['"]/g)]){
-      const dependency=await compile(resolve(dirname(path),match[1]+'.ts'));
+    for(const match of [...code.matchAll(/from\s+['"]([^'"]+)['"]/g)]){
+      const dependency=match[1].startsWith('.')
+        ?await compile(resolve(dirname(path),match[1]+'.ts'),[...ancestors,path])
+        :pathToFileURL(require.resolve(match[1])).href;
       code=code.replace(match[0],`from '${dependency}'`);
     }
     return 'data:text/javascript;base64,'+Buffer.from(code).toString('base64');
   }
-  return import(await compile(resolve(workerRoot,relative)));
+  try{return await import(await compile(resolve(workerRoot,relative)));}
+  catch{throw new SafeSandboxError('SOURCE_MODULE_LOAD_FAILED');}
 }
 
 export function validateDemoConfig(config){
@@ -51,9 +59,28 @@ export function wrangler(args,{input,quiet=false}={}){
   return result.stdout;
 }
 export async function readJson(url,init={}){
-  const response=await fetch(url,{...init,redirect:'error',signal:AbortSignal.timeout(30000)});
-  if(!response.ok)throw new Error('HTTP_'+response.status);
-  return response.json();
+  let response;
+  try{response=await fetch(url,{...init,redirect:'error',signal:AbortSignal.timeout(30000)});}
+  catch{throw new SafeSandboxError('NETWORK_OR_TLS_FAILURE');}
+  if(!response.ok){
+    let code='HTTP_ERROR';
+    let providerStatus;
+    try{const body=await response.json();code=safeDiagnostic(new Error(body?.code??body?.error)).code;
+      if(Number.isInteger(body?.providerStatus)&&body.providerStatus>=100&&body.providerStatus<=599)providerStatus=body.providerStatus;}catch{}
+    const failure=new SafeSandboxError(code==='UNEXPECTED_FAILURE'?'HTTP_ERROR':code,response.status);
+    failure.providerStatus=providerStatus;throw failure;
+  }
+  try{return await response.json();}catch{throw new SafeSandboxError('INVALID_JSON_RESPONSE',response.status);}
+}
+export async function verifySandboxOAuth(env,fetcher=fetch){
+  if(env.PAYPAL_ENV!=='sandbox')throw new SafeSandboxError('EXPLICIT_SANDBOX_REQUIRED');
+  if(!env.PAYPAL_CLIENT_ID?.trim()||!env.PAYPAL_CLIENT_SECRET?.trim())throw new SafeSandboxError('PAYPAL_NOT_CONFIGURED');
+  const {getPayPalAccessToken}=await sourceModule('src/session-payments/providers/paypal.ts');
+  await getPayPalAccessToken(env,async(url,init)=>{
+    try{return await fetcher(url,{...init,redirect:'error',signal:AbortSignal.timeout(30000)});}
+    catch{throw new SafeSandboxError('OAUTH_TRANSPORT_FAILURE');}
+  });
+  return {oauthVerified:true,merchantVerified:false,paymentVerified:false,environment:'sandbox'};
 }
 export function matchingShas(a,b){return /^[a-f0-9]{40}$/i.test(a??'')&&/^[a-f0-9]{40}$/i.test(b??'')&&a.toLowerCase()===b.toLowerCase();}
 
@@ -93,10 +120,7 @@ async function main(){
     if(!provider.paypalReadiness?.ready||provider.paypalEnvironment!=='sandbox')process.exitCode=2;
   }else if(command==='oauth'){
     // Explicit, read-only sandbox request. OAuth cannot attest merchant authorization.
-    if(process.env.PAYPAL_ENV!=='sandbox')throw new Error('EXPLICIT_SANDBOX_REQUIRED');
-    const {getPayPalAccessToken}=await sourceModule('src/session-payments/providers/paypal.ts');
-    await getPayPalAccessToken(process.env);
-    console.log(JSON.stringify({oauthVerified:true,merchantVerified:false,paymentVerified:false,environment:'sandbox'}));
+    console.log(JSON.stringify(await verifySandboxOAuth(process.env)));
   }else if(command==='dry-run'){
     const sha=execFileSync('git',['rev-parse','HEAD'],{cwd:workerRoot,encoding:'utf8'}).trim();
     // Dry-run explicitly identifies its source, including dirty state. Never deploys.
@@ -111,4 +135,4 @@ async function main(){
     console.log(`Operator only; inspect commit and untracked source dependencies first. No deploy executed.\nwrangler deploy --config wrangler.demo.jsonc --var BUILD_GIT_SHA:${sha} --var BUILD_ENVIRONMENT:preview`);
   }else throw new Error('UNKNOWN_COMMAND');
 }
-if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href)main().catch(()=>{console.error('Sandbox check failed. No secret values are printed.');process.exitCode=1;});
+if(process.argv[1]&&import.meta.url===pathToFileURL(resolve(process.argv[1])).href)main().catch(error=>{console.error(JSON.stringify(safeDiagnostic(error,process.argv[2]??'config')));process.exitCode=1;});

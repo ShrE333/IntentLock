@@ -9,7 +9,7 @@ if (-not (Test-Path -LiteralPath $wrangler)) { throw 'Repository Wrangler is mis
 
 function Invoke-Check([string]$Command) {
     $result = & node $tool $Command
-    if ($LASTEXITCODE -ne 0) { throw 'Sandbox target check failed; no configuration changed.' }
+    if ($LASTEXITCODE -ne 0) { throw "Sandbox $Command check failed (exit $LASTEXITCODE). See the preceding safe stage/code/status diagnostic; no configuration changed." }
     return $result
 }
 function Read-Protected([string]$Prompt) {
@@ -21,7 +21,7 @@ function Read-Protected([string]$Prompt) {
 function Put-Protected([string]$Name, [string]$Value) {
     # Pipeline stdin, never a process argument or file. Suppress provider output.
     $Value | & node $tool put $Name
-    if ($LASTEXITCODE -ne 0) { throw "Failed configuring $Name. No values are printed." }
+    if ($LASTEXITCODE -ne 0) { throw "Failed configuring $Name (exit $LASTEXITCODE). See the preceding safe stage/code/status diagnostic; no values are printed." }
 }
 
 Invoke-Check 'config' | Write-Output

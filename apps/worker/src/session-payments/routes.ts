@@ -1,3 +1,4 @@
+import {safePaymentFailure} from './safe-errors';
 import {getSession} from "../sessions/repository";
 import {getVerifiedProofReceipt} from "./proof";
 import {
@@ -53,7 +54,7 @@ export async function handleSessionPaymentRoutes(
     catch(error){
       return json({
         error:"SESSION_PAYPAL_WEBHOOK_FAILED",
-        message:error instanceof Error?error.message:String(error)
+        ...safePaymentFailure(error)
       },500);
     }
   }
@@ -63,7 +64,7 @@ export async function handleSessionPaymentRoutes(
     catch(error){
       return json({
         error:"SESSION_RAZORPAY_WEBHOOK_FAILED",
-        message:error instanceof Error?error.message:String(error)
+        ...safePaymentFailure(error)
       },500);
     }
   }
@@ -111,7 +112,7 @@ export async function handleSessionPaymentRoutes(
     }catch(error){
       return json({
         error:"SESSION_PAYMENT_FAILED",
-        message:error instanceof Error?error.message:String(error)
+        ...safePaymentFailure(error)
       },409);
     }
   }
@@ -134,7 +135,7 @@ export async function handleSessionPaymentRoutes(
     }catch(error){
       return json({
         error:"PAYPAL_AUTHORIZE_FAILED",
-        message:error instanceof Error?error.message:String(error)
+        ...safePaymentFailure(error)
       },409);
     }
   }
@@ -149,7 +150,7 @@ export async function handleSessionPaymentRoutes(
     }catch(error){
       return json({
         error:"PAYPAL_CAPTURE_FAILED",
-        message:error instanceof Error?error.message:String(error)
+        ...safePaymentFailure(error)
       },409);
     }
   }

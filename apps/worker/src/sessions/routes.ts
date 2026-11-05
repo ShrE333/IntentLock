@@ -1,3 +1,4 @@
+import {safePaymentFailure} from '../session-payments/safe-errors';
 import {getWallet} from "../wallets/repository";
 import {getWalletReadiness} from "../wallets/policy";
 import {connectorStatus,type CommerceEnv} from "../commerce/registry";
@@ -106,6 +107,6 @@ export async function handleSessionRoutes(request:Request,env:Env,url:URL):Promi
 
     return json({error:"SESSION_ROUTE_NOT_FOUND"},404);
   }catch(error){
-    return json({error:"SESSION_REQUEST_FAILED",message:error instanceof Error?error.message:String(error)},400);
+    return json({error:"SESSION_REQUEST_FAILED",...safePaymentFailure(error)},400);
   }
 }

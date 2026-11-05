@@ -3,6 +3,7 @@ import {evaluateWalletTransaction} from "../wallets/policy";
 import {getWallet} from "../wallets/repository";
 import {getSession,addEvent} from "../sessions/repository";
 import {verifyRazorpayWebhook} from "../payments/webhook";
+import {safePaymentFailure} from './safe-errors';
 import {sha256Hex as hashWebhook} from "../db/audit";
 import {buildSessionPaymentIdempotencyKey} from "./crypto";
 import {SessionPaymentLock} from "./lock";
@@ -647,7 +648,7 @@ async function finishVerifiedCapture(
           session:chat.wahaSession,chatId:chat.chatId,
           text:`✅ *Payment captured*\n\nIntentLock verified the ${input.provider.toUpperCase()} webhook and updated your Intent Wallet.\n\nPayment: ${payment.currency} ${payment.amount.toFixed(2)}\nWallet debit: ${walletSpendCurrency} ${walletSpendAmount.toFixed(2)}\nRemaining authority: ${walletSpendCurrency} ${spend.remainingAuthority.toFixed(2)}\n\n🧾 Proof Receipt\n${receipt.receiptId}\n\nSession:\n${session.sessionId}`
         });
-      }catch(error){console.error("WAHA payment confirmation failed",error);}
+      }catch(error){console.error("WAHA payment confirmation failed",safePaymentFailure(error));}
     }
   }
 
@@ -684,11 +685,7 @@ function paypalProcessingLog(env:SessionPaymentEnv,context:Record<string,unknown
       console.log(name,{...context,...data});
     },
     error(error:unknown){
-      let message=error instanceof Error?error.message:String(error);
-      for(const value of [env.DATABASE_URL,env.PAYPAL_CLIENT_SECRET,env.APPROVAL_SIGNING_SECRET]){
-        if(value) message=message.replaceAll(value,"[REDACTED]");
-      }
-      console.error("PAYPAL_WEBHOOK_PROCESSING_ERROR",{...context,stage:currentStage,message});
+      console.error("PAYPAL_WEBHOOK_PROCESSING_ERROR",{...context,stage:currentStage,...safePaymentFailure(error)});
     }
   };
 }

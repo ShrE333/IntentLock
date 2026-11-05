@@ -106,6 +106,15 @@ describe("verified PayPal webhook finalization",()=>{
     expect(console.error).toHaveBeenCalledWith("PAYPAL_WEBHOOK_PROCESSING_ERROR",expect.objectContaining({sessionId:"ps_1"}));
   });
 
+  it('does not log credential-bearing exception text from settlement dependencies',async()=>{
+    vi.mocked(sessions.addEvent).mockRejectedValueOnce(new Error('Bearer isolated-access-token postgres://user:password@private-db'));
+    await expect(deliver()).rejects.toThrow('isolated-access-token');
+    const logs=JSON.stringify(vi.mocked(console.error).mock.calls);
+    expect(logs).not.toContain('isolated-access-token');expect(logs).not.toContain('password');
+    expect(console.error).toHaveBeenCalledWith('PAYPAL_WEBHOOK_PROCESSING_ERROR',expect.objectContaining({code:'PAYMENT_OPERATION_FAILED'}));
+    expect(debitCount).toBe(0);
+  });
+
   it("reconciles a prior wallet debit when the session update failed",async()=>{
     vi.mocked(repo.markSessionPaymentCaptured).mockRejectedValueOnce(new Error("session update unavailable"));
     await expect(deliver()).rejects.toThrow("session update unavailable");
@@ -175,6 +184,22 @@ describe("verified PayPal webhook finalization",()=>{
     expect(saved.size).toBe(1);
     expect((await processSessionPayPalWebhook(queuedEnv,request())).status).toBe(202);
     await finalizePayPalCaptureJob(env,send.mock.calls[1][0]);expect(debitCount).toBe(1);
+  });
+
+  it('requires consumer acknowledgment after duplicate authenticated deliveries and preserves one debit',async()=>{
+    const send=vi.fn().mockResolvedValue(undefined);
+    const queuedEnv={...env,PURCHASE_QUEUE:{send}};
+    expect((await processSessionPayPalWebhook(queuedEnv,request())).status).toBe(202);
+    expect((await processSessionPayPalWebhook(queuedEnv,request())).status).toBe(202);
+    const messages=send.mock.calls.map(([body])=>({body,attempts:1,ack:vi.fn(),retry:vi.fn()}));
+    // Enqueue acceptance is not a consumer ack or settlement observation.
+    expect(messages).toHaveLength(2);expect(debitCount).toBe(0);
+    for(const message of messages)expect(message.ack).not.toHaveBeenCalled();
+    const queueEnv={...env,DATABASE_URL:'postgres://test.invalid/db',WAHA_BASE_URL:'',WAHA_API_KEY:''};
+    await handlePurchaseQueue({messages},queueEnv,{});
+    for(const message of messages){expect(message.ack).toHaveBeenCalledTimes(1);expect(message.retry).not.toHaveBeenCalled();}
+    expect(debitCount).toBe(1);expect(session.status).toBe('CAPTURED');
+    expect(proof.createProofReceipt).toHaveBeenCalledTimes(1);
   });
 
   it("rejects queue jobs without persisted verified evidence",async()=>{
