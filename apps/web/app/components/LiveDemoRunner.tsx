@@ -26,11 +26,13 @@ const body=(data:unknown):RequestInit=>({method:'POST',headers:{'content-type':'
 function ready(w:Wallet){return w.status==='ACTIVE'&&sandboxWalletAvailable(w)>0&&new Date(w.validUntil).getTime()>Date.now()+15*60*1000;}
 export function LiveDemoRunner(){
  const [paymentReady,setPaymentReady]=useState(false);
+ const [paymentSetup,setPaymentSetup]=useState<string[]>([]);
  const [events,setEvents]=useState<{eventType:string}[]>([]);
  const [choice,setChoice]=useState(0);const [wallets,setWallets]=useState<Wallet[]>([]);const [connector,setConnector]=useState<Connector|null>(null);
  const [walletId,setWalletId]=useState('');const [loading,setLoading]=useState(true);const [busy,setBusy]=useState('');const [error,setError]=useState('');const [session,setSession]=useState<Session|null>(null);
- useEffect(()=>{let active=true;(async()=>{try{const [w,c,p]=await Promise.all([api<{wallets:Wallet[]}>('/api/wallets'),api<{connectors:Connector[]}>('/api/commerce/connectors'),api<{paypalConfigured:boolean;paypalEnvironment:string}>('/api/payments/provider')]);if(!active)return;
+ useEffect(()=>{let active=true;(async()=>{try{const [w,c,p]=await Promise.all([api<{wallets:Wallet[]}>('/api/wallets'),api<{connectors:Connector[]}>('/api/commerce/connectors'),api<{paypalConfigured:boolean;paypalEnvironment:string;paypalReadiness?:{ready:boolean;missing:string[];issues:string[]}}>('/api/payments/provider')]);if(!active)return;
    const demo=c.connectors.find(x=>x.id==='paypal-demo-marketplace'&&x.enabled)??null;setPaymentReady(sandboxServicesReady(p));
+   setPaymentSetup([...(p.paypalReadiness?.missing??[]),...(p.paypalReadiness?.issues??[])]);
    setConnector(demo);setWallets(w.wallets);setWalletId(w.wallets.find(x=>ready(x)&&x.currency==='USD')?.walletId??'');
   }catch(e){if(active)setError(e instanceof Error?e.message:String(e));}finally{if(active)setLoading(false);}})();return()=>{active=false};},[]);
  const selectedWallet=wallets.find(w=>w.walletId===walletId);
@@ -52,6 +54,7 @@ export function LiveDemoRunner(){
    <div className="il-runner-products">{products.map((p,i)=><button type="button" key={p.name} aria-pressed={choice===i} className={choice===i?'is-active':''} onClick={()=>{setChoice(i);setSession(null);setEvents([]);setError('')}}><span><strong>{p.name}</strong><small>{p.detail}</small></span><small>Backend evaluates</small></button>)}</div>
    {loading?<div className="il-inline-status">Checking the live IntentLock API…</div>:connector?<div className="il-live-dot">Sandbox policy catalog available; payment connectivity is not verified</div>:<div className="il-inline-warning">PayPal sandbox payment services are unavailable or not configured in this deployment.</div>}
    {connector&&!paymentReady&&<div className="il-inline-warning">PayPal sandbox payment services are unavailable or not configured in this deployment.</div>}
+   {connector&&!paymentReady&&paymentSetup.length>0&&<div className="il-inline-warning">An operator must complete sandbox payment setup. <details><summary>Configuration details</summary>{paymentSetup.join(', ')}</details></div>}
    {wallets.some(w=>ready(w)&&w.currency==='USD')&&<label className="il-field">Active USD wallet<select value={walletId} onChange={e=>setWalletId(e.target.value)}><option value="">Choose wallet</option>{wallets.filter(w=>ready(w)&&w.currency==='USD').map(w=><option key={w.walletId} value={w.walletId}>{w.walletId.slice(0,15)}… · ${sandboxWalletAvailable(w).toFixed(2)} remaining</option>)}</select></label>}
    <div className="il-demo-actions">
      {<button type="button" className="il-button il-button--outline" onClick={createSandboxWallet} disabled={!!busy||loading}>Create $100 scenario wallet</button>}

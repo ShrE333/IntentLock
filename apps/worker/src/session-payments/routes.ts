@@ -11,6 +11,7 @@ import {
 import {getSessionPayment} from "./repository";
 import {getWalletReservation} from './reservations';
 import {recipientMappingConfigured} from '../payments/recipient-binding';
+import {paypalReadiness} from './readiness';
 import {activePaymentProvider} from "./providers";
 import {evaluatePaymentCapability,selectPaymentProvider} from "./providers/capabilities";
 
@@ -75,6 +76,7 @@ export async function handleSessionPaymentRoutes(
       selection:"PER_TRANSACTION_CAPABILITY",
       paypalConfigured:Boolean(env.PAYPAL_CLIENT_ID&&env.PAYPAL_CLIENT_SECRET&&env.PAYPAL_WEBHOOK_ID),
       recipientMappingConfigured:recipientMappingConfigured(env),
+      paypalReadiness:paypalReadiness(env),
       razorpayConfigured:Boolean(env.RAZORPAY_KEY_ID&&env.RAZORPAY_KEY_SECRET)
     });
   }

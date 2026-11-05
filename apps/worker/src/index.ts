@@ -1,4 +1,5 @@
 import {handleAuthorityRoutes} from './wallet-authority/routes';
+import {workerBuildInfo, type BuildEnv} from './build-info';
 import {CORS_ALLOWED_HEADERS,globalPreflightResponse,originAllowed,applyCors} from "./http/cors";
 import {secureFinancialRequest} from './access/gate';
 import {identityOf} from './access/identity';
@@ -647,7 +648,8 @@ const worker = {
       return json({
         service: "intentlock-worker",
         status: "ok",
-        version: "v10.9",
+        version: "V11.5.1",
+        ...workerBuildInfo(env as AppEnv & BuildEnv),
         databaseConfigured: Boolean(env.DATABASE_URL),
         redisConfigured: Boolean(
           env.UPSTASH_REDIS_REST_URL &&
