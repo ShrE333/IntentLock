@@ -34,12 +34,20 @@ export function compileWalletInstruction(message:string,now=new Date()){
  };
  const clauses=message.trim().split(/\.(?=\s|$)|[;\n]+/).map(s=>s.trim()).filter(Boolean);
  if(!message.trim()||message.length>4000)errors.push('INVALID_INSTRUCTION_LENGTH');
- for(const clause of clauses){
+ for(const original of clauses){
+  // Normalize only explicit, bounded grammar variants; keep every unknown
+  // restriction visible as an error rather than asking a model to discard it.
+  const clause=original
+   .replace(/^(Give my (?:shopping )?agent|Budget|Total budget) ([A-Z]{3}) ([0-9]+(?:\.[0-9]{1,3})?)(?= for |$)/i,'$1 $3 $2')
+   .replace(/ for one week$/i,' for seven days');
   let m:RegExpMatchArray|null;
   if(m=clause.match(new RegExp('^(?:Give my (?:shopping )?agent|Budget|Total budget) '+number+' ([A-Z]{3})(?: for (one|two|three|four|five|six|seven|[1-9][0-9]*) days?)?$','i'))){
    set('totalAuthority',Number(m[1]),clause);set('currency',m[2].toUpperCase(),clause);
    if(m[3]){const days=Number(m[3])||['one','two','three','four','five','six','seven'].indexOf(m[3].toLowerCase())+1;
     if(days>365)errors.push('EXPIRY_TOO_DISTANT');else set('validUntil',new Date(now.getTime()+days*86400000).toISOString(),clause);}
+  }else if(m=clause.match(new RegExp('^It can buy ([a-z][a-z -]{0,79}) but must ask above ([A-Z]{3}) '+number+'$','i'))){
+   set('allowedCategories',[m[1].trim().toLowerCase()],original);
+   set('currency',m[2].toUpperCase(),original);set('autoBuyLimit',Number(m[3]),original);
   }else if(m=clause.match(new RegExp('^(?:It may automatically spend up to|Auto(?:matic)? limit) '+number+' ([A-Z]{3})(?: per purchase)?(?:,? must ask above that)?$','i'))){
    set('autoBuyLimit',Number(m[1]),clause);set('currency',m[2].toUpperCase(),clause);
   }else if(m=clause.match(new RegExp('^(?:Hard ceiling|Maximum per purchase|Max single transaction) '+number+' ([A-Z]{3})$','i'))){

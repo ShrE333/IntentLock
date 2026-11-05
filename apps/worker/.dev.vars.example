@@ -16,6 +16,11 @@ PAYPAL_CLIENT_ID=YOUR_SANDBOX_CLIENT_ID
 PAYPAL_CLIENT_SECRET=YOUR_SANDBOX_CLIENT_SECRET
 PAYPAL_WEBHOOK_ID=YOUR_PAYPAL_WEBHOOK_ID
 PAYPAL_RETURN_BASE_URL=http://localhost:3000
+# Required: use the sandbox BUSINESS seller's merchant ID, never the buyer ID.
+PAYPAL_ACCOUNT_MERCHANT_ID=REPLACE_WITH_SANDBOX_BUSINESS_MERCHANT_ID
+# Registry entries must describe an explicitly authorized seller. See docs/deployment.md.
+# An empty array deliberately disables checkout; do not copy synthetic test mappings.
+PAYPAL_MERCHANT_BINDINGS_JSON=[]
 # Set these to the connected PayPal seller account, not the buyer.
 # PAYPAL_ACCOUNT_COUNTRY=US
 # PAYPAL_ACCEPTED_CURRENCIES=USD,EUR,GBP,SGD,AUD,CAD,JPY
@@ -71,3 +76,9 @@ PAYEELOCK_MODE=observe
 # Refund requests are blocked when an unresolved PayPal dispute exists by default.
 REFUND_MAX_AGE_DAYS=30
 REFUND_BLOCK_ON_OPEN_DISPUTE=true
+
+# Optional release identity. Set BUILD_GIT_SHA to the exact tested 40-character SHA.
+# BUILD_GIT_SHA=
+BUILD_ENVIRONMENT=development
+# Enable the draft/review/explicit-confirm wallet policy workflow.
+NATURAL_LANGUAGE_WALLETS_ENABLED=true

@@ -1,6 +1,11 @@
 import {describe,it,expect} from 'vitest';
-import {sandboxWalletAvailable} from '../../../web/app/demo-evidence';
+import {sandboxServicesReady,sandboxWalletAvailable} from '../../../web/app/demo-evidence';
 describe('redesigned demo and reservation integration',()=>{
+ it('does not advertise payment readiness when the backend reports incomplete setup',()=>{
+  const provider={paypalConfigured:true,paypalEnvironment:'sandbox',recipientMappingConfigured:true};
+  expect(sandboxServicesReady({...provider,paypalReadiness:{ready:false}})).toBe(false);
+  expect(sandboxServicesReady({...provider,paypalReadiness:{ready:true}})).toBe(true);
+ });
  it('subtracts active authority holds from the displayed available amount',()=>expect(sandboxWalletAvailable({totalAuthority:100,spentAmount:20,reservedAmount:70})).toBe(10));
  it('does not offer an entirely reserved wallet as ready',()=>expect(sandboxWalletAvailable({totalAuthority:100,spentAmount:0,reservedAmount:100})).toBe(0));
  it.each([undefined,NaN,Infinity,-1])('fails closed for missing or malformed reservation counters %s',reservedAmount=>expect(sandboxWalletAvailable({totalAuthority:100,spentAmount:0,reservedAmount})).toBe(0));

@@ -1,5 +1,17 @@
 # IntentLock
 
+Release review (2026-11-05): local financial and UI regression coverage is not
+proof of production readiness or a completed provider payment. The implementation
+includes a reviewed natural-language wallet compiler; merchant checkout remains
+restricted to explicitly mapped sandbox demo sellers.
+
+- [Feature inventory](docs/feature-status.md)
+- [Architecture](docs/architecture.md)
+- [Sandbox deployment and rollback](docs/deployment.md)
+- [Security and remaining advisories](docs/security.md)
+- [Testing](docs/testing.md)
+- [Current release gate and blockers](docs/release-readiness.md)
+
 ## The Authorization Firewall for Agentic Commerce
 
 **AI can decide what to buy. IntentLock decides what money is actually allowed to do.**
@@ -67,7 +79,7 @@ IntentLock separates that request into two responsibilities:
 
 Wallet policy is not injected into marketplace search, so the system cannot silently manufacture an ALLOW result by hiding disallowed candidates.
 
-Natural-language **purchase goals** are implemented. A natural-language **authority compiler** that turns prose such as “give my agent ₹30,000 for one week, ask above ₹5,000” into a reviewable structured Intent Wallet is planned for the next major version.
+Natural-language **purchase goals** and a bounded **authority compiler** are implemented. The compiler creates a draft, requests missing controls, supports review/simulation, and requires explicit human confirmation before activation. Unknown restrictions and contradictory instructions fail closed; it does not understand arbitrary language.
 
 ---
 
@@ -154,7 +166,7 @@ Proof receipt
 
 A browser redirect or successful API call cannot directly mark a transaction `CAPTURED`.
 
-A full sandbox transaction has been exercised end to end during development, including order, authorization, capture, verified webhook, ledger settlement and proof generation.
+Historical development notes report a sandbox transaction. This session has not verified a real provider transaction; the current release gate requires an isolated end-to-end sandbox run with genuine credentials and verified event delivery.
 
 ### Razorpay
 
@@ -347,7 +359,7 @@ npx wrangler deploy --dry-run --outdir .wrangler/ci-dry-run
 
 ---
 
-## Verification status
+## Historical verification status (not the current release gate)
 
 The V11.4 checkpoint was manually validated with:
 
@@ -377,7 +389,7 @@ Test success demonstrates the covered normal/adversarial/failure paths; it is no
 | V11.3 | Transaction reliability and decision transparency |
 | V11.4 | Refund Firewall + PayPal dispute integration |
 | **V11.4.1** | **Refund ambiguity recovery + rounding closure + CORS + CI/repo integrity** |
-| Next | Natural-language authority compiler |
+| V11.5 | Bounded natural-language authority compiler with explicit review and confirmation |
 
 ---
 

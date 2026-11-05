@@ -3,6 +3,19 @@ import {compileWalletInstruction,DraftWalletPolicySchema,canonicalPolicy,policyD
 import {evaluateWalletTransaction} from '../wallets/policy';
 const text='Give my shopping agent 100 USD for one day. Allow Sony and Bose electronics. Auto limit 50 USD. Hard ceiling 75 USD. No blocked brands. No required features. Any product condition. Country US.';
 describe('untrusted natural-language wallet compiler',()=>{
+ it('extracts the INR week request while requiring all omitted controls',()=>{
+  const now=new Date('2026-11-05T00:00:00Z');
+  const r=compileWalletInstruction('Give my shopping agent INR 30000 for one week. It can buy electronics but must ask above INR 5000.',now);
+  expect(r.errors).toEqual([]);
+  expect(r.policy).toMatchObject({currency:'INR',totalAuthority:30000,autoBuyLimit:5000,allowedCategories:['electronics'],validUntil:'2026-11-12T00:00:00.000Z'});
+  expect(r.ready).toBe(false);expect(r.missing).toContain('maxSingleTransaction');
+  expect(r.missing).toContain('allowedBrands');
+ });
+ it('never drops appended restrictions or accepts conflicting example limits',()=>{
+  const example='Give my shopping agent INR 30000 for one week. It can buy electronics but must ask above INR 5000.';
+  expect(compileWalletInstruction(example+' Except on weekends.').errors.length).toBeGreaterThan(0);
+  expect(compileWalletInstruction(example+' Auto limit 6000 INR.').errors).toContain('CONFLICTING_autoBuyLimit');
+ });
  it('extracts explicit limits without activating a wallet',()=>{
   const r=compileWalletInstruction(text);expect(r.ready).toBe(true);expect(r.state).toBe('DRAFT_NOT_AUTHORIZED');
   expect(r.policy).toMatchObject({totalAuthority:100,autoBuyLimit:50,maxSingleTransaction:75,currency:'USD',allowedBrands:['Sony','Bose']});

@@ -35,6 +35,18 @@ export function paypalBaseUrl(env:PayPalEnv){
 
 const PAYPAL_ZERO_DECIMAL_CURRENCIES=new Set(["HUF","JPY","TWD"]);
 
+export function paypalReturnBaseUrl(env:PayPalEnv){
+  if(!env.PAYPAL_RETURN_BASE_URL?.trim())throw new Error('PAYPAL_RETURN_BASE_URL_NOT_CONFIGURED');
+  try{
+    const url=new URL(env.PAYPAL_RETURN_BASE_URL);
+    const local=['localhost','127.0.0.1','[::1]'].includes(url.hostname);
+    if(url.username||url.password||url.search||url.hash||url.pathname!=='/'
+      ||(url.protocol!=='https:'&&!(env.PAYPAL_ENV!=='live'&&local&&url.protocol==='http:')))
+      throw new Error('INVALID_ORIGIN');
+    return url.origin;
+  }catch{throw new Error('PAYPAL_RETURN_BASE_URL_INVALID');}
+}
+
 export function formatPayPalMoney(amount:number,currency:string){
   if(!Number.isFinite(amount) || amount<=0) throw new Error("INVALID_AMOUNT");
   const c=currency.trim().toUpperCase();
@@ -140,8 +152,7 @@ export async function createPayPalOrder(
   if(!isPayPalSupportedCurrency(currency))
     throw new Error(`PAYPAL_UNSUPPORTED_CURRENCY:${currency}`);
 
-  const base=String(env.PAYPAL_RETURN_BASE_URL??"").replace(/\/+$/g,"");
-  if(!base) throw new Error("PAYPAL_RETURN_BASE_URL_NOT_CONFIGURED");
+  const base=paypalReturnBaseUrl(env);
 
   const returnUrl=`${base}/new-purchase?paypal=approved&sessionId=${encodeURIComponent(input.sessionId)}`;
   const cancelUrl=`${base}/new-purchase?paypal=cancelled&sessionId=${encodeURIComponent(input.sessionId)}`;

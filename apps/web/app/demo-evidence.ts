@@ -2,8 +2,9 @@ export function demoStages(session:{selectedDecision?:string|null;quoteHash?:str
   const types=new Set(events.map(e=>e.eventType));
   return [Boolean(session),Boolean(session?.selectedDecision),types.has('PAYEE_IDENTITY_BOUND')&&types.has('COMMERCE_QUOTE_REVALIDATED'),types.has('PAYPAL_AUTHORIZED')&&types.has('PAYPAL_CAPTURE_REQUESTED'),verifiedProof];
 }
-export function sandboxServicesReady(provider:{paypalConfigured?:boolean;paypalEnvironment?:string;recipientMappingConfigured?:boolean}){
-  return provider.paypalConfigured===true&&provider.paypalEnvironment==='sandbox'&&provider.recipientMappingConfigured===true;
+export function sandboxServicesReady(provider:{paypalConfigured?:boolean;paypalEnvironment?:string;recipientMappingConfigured?:boolean;paypalReadiness?:{ready:boolean}}){
+  return provider.paypalConfigured===true&&provider.paypalEnvironment==='sandbox'&&provider.recipientMappingConfigured===true
+    &&(provider.paypalReadiness===undefined||provider.paypalReadiness.ready===true);
 }
 export function sandboxWalletAvailable(wallet:{totalAuthority:number;spentAmount:number;reservedAmount?:number}){
   const {totalAuthority,spentAmount,reservedAmount}=wallet;
