@@ -5,7 +5,7 @@ import type {
   PaymentCheckout
 } from "./types";
 
-import {assertTrustedRecipient,type RecipientEnv} from '../../payments/recipient-binding';
+import {assertTrustedRecipient,recipientEnvironment,type RecipientEnv} from '../../payments/recipient-binding';
 export type PayPalEnv = RecipientEnv & {
   PAYPAL_ENV?: string;
   PAYPAL_CLIENT_ID?: string;
@@ -28,7 +28,7 @@ export function isPayPalSupportedCurrency(currency:string){
 }
 
 export function paypalBaseUrl(env:PayPalEnv){
-  return String(env.PAYPAL_ENV??"sandbox").toLowerCase()==="live"
+  return recipientEnvironment(env)==="live"
     ? "https://api-m.paypal.com"
     : "https://api-m.sandbox.paypal.com";
 }
@@ -41,7 +41,7 @@ export function paypalReturnBaseUrl(env:PayPalEnv){
     const url=new URL(env.PAYPAL_RETURN_BASE_URL);
     const local=['localhost','127.0.0.1','[::1]'].includes(url.hostname);
     if(url.username||url.password||url.search||url.hash||url.pathname!=='/'
-      ||(url.protocol!=='https:'&&!(env.PAYPAL_ENV!=='live'&&local&&url.protocol==='http:')))
+      ||(url.protocol!=='https:'&&!(recipientEnvironment(env)==='sandbox'&&local&&url.protocol==='http:')))
       throw new Error('INVALID_ORIGIN');
     return url.origin;
   }catch{throw new Error('PAYPAL_RETURN_BASE_URL_INVALID');}
@@ -86,9 +86,10 @@ export async function getPayPalAccessToken(
 
   const body:any=await jsonOrText(response);
   if(!response.ok || !body?.access_token){
-    throw new Error(`PAYPAL_OAUTH_${response.status}:${body?.error_description??body?.error??"token failed"}`);
+    throw new Error(`PAYPAL_OAUTH_${response.status}:TOKEN_REQUEST_FAILED`);
   }
-  return String(body.access_token);
+  if(typeof body.access_token!=="string" || !body.access_token.trim()) throw new Error("PAYPAL_OAUTH_INVALID_TOKEN");
+  return body.access_token;
 }
 
 async function paypalRequest(
@@ -132,8 +133,9 @@ export async function getPayPalCaptureDetails(
     undefined,
     fetcher
   );
+  if(body?.id!==captureId)throw new Error("PAYPAL_CAPTURE_IDENTITY_MISMATCH");
   return {
-    captureId:String(body?.id??captureId),
+    captureId:String(body.id),
     status:String(body?.status??"UNKNOWN"),
     amount:Number(body?.amount?.value??0),
     currency:String(body?.amount?.currency_code??"").toUpperCase(),
@@ -326,8 +328,9 @@ export async function getPayPalRefundDetails(
     env,`/v2/payments/refunds/${encodeURIComponent(refundId)}`,
     {method:"GET"},undefined,fetcher
   );
+  if(body?.id!==refundId)throw new Error("PAYPAL_REFUND_IDENTITY_MISMATCH");
   return {
-    refundId:String(body?.id??refundId),status:String(body?.status??"UNKNOWN"),
+    refundId:String(body.id),status:String(body?.status??"UNKNOWN"),
     amount:Number(body?.amount?.value??0),currency:String(body?.amount?.currency_code??"").toUpperCase(),
     createTime:body?.create_time?String(body.create_time):null,
     updateTime:body?.update_time?String(body.update_time):null

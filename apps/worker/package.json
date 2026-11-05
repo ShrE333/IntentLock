@@ -5,7 +5,12 @@
   "scripts": {
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
-    "test": "vitest run"
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit --strict",
+    "check:demo": "node scripts/sandbox-tools.mjs config",
+    "dry-run:demo": "node scripts/sandbox-tools.mjs dry-run",
+    "check:paypal": "node scripts/sandbox-tools.mjs readiness",
+    "test:sandbox": "node scripts/paypal-sandbox-e2e.mjs"
   },
   "dependencies": {
     "@neondatabase/serverless": "^1.0.1",

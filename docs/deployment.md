@@ -1,5 +1,8 @@
 # Deployment and sandbox configuration
 
+For V11.5.1 guarded PowerShell setup, the exact payment API contract, real sandbox
+runner, failure matrix and SHA tooling, use [PayPal sandbox runbook](paypal-sandbox-runbook.md).
+
 No production deploy, database migration or live-money request is authorized by
 this release work. Use separate preview Worker, queue, Durable Object namespace,
 Neon branch/database, Redis and provider sandbox accounts. The tracked Wrangler
