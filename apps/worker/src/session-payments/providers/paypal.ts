@@ -82,7 +82,9 @@ export async function getPayPalAccessToken(
       "content-type":"application/x-www-form-urlencoded",
       accept:"application/json"
     },
-    body:"grant_type=client_credentials",redirect:'error',signal:AbortSignal.timeout(30000)
+    // Workers only support 'follow' and 'manual'. With 'manual' a 3xx is not ok and fails below,
+    // so credentials are never forwarded to a redirect target.
+    body:"grant_type=client_credentials",redirect:'manual',signal:AbortSignal.timeout(30000)
   }).catch(()=>{throw new Error('OAUTH_TRANSPORT_FAILURE');});
 
   const body:any=await jsonOrText(response);

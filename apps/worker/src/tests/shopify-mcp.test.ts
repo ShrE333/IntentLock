@@ -58,7 +58,7 @@ describe('bounded read-only MCP transport',()=>{
  });
  it('sends only the allowlisted query/localization/profile to the fixed endpoint',async()=>{
   const fetcher=fetchRpc();await new ShopifyGlobalCatalogConnector(catalogEnv,fetcher).search({query:'Headphones',limit:2,brands:['do-not-forward'],maxPrice:1});
-  const [url,init]=fetcher.mock.calls[0];expect(url).toBe(SHOPIFY_CATALOG_ENDPOINT);expect(init?.redirect).toBe('error');expect(Object.keys(init?.headers??{})).not.toContain('authorization');
+  const [url,init]=fetcher.mock.calls[0];expect(url).toBe(SHOPIFY_CATALOG_ENDPOINT);expect(init?.redirect).toBe('manual');expect(Object.keys(init?.headers??{})).not.toContain('authorization');
   const request=JSON.parse(String(init?.body));expect(request.params.arguments.catalog).toEqual(args);expect(String(init?.body)).not.toMatch(/wallet|do-not-forward|maxPrice/);
  });
  it.each([{...args,endpoint:'https://evil.example'}, {...args,pagination:{limit:100}}, {...args,query:'x'.repeat(401)}])('rejects widened input %j',async input=>{const fetcher=fetchRpc();await expect(new ShopifyCatalogClient(catalogEnv,fetcher).call('search_catalog',input)).rejects.toThrow('ARGUMENTS_INVALID');expect(fetcher).not.toHaveBeenCalled();});

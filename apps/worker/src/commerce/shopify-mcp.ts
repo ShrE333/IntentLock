@@ -49,9 +49,10 @@ export class ShopifyCatalogClient{
   const profile=profileUrl(this.env),id=crypto.randomUUID();const abort=new AbortController();
   const timer=setTimeout(()=>abort.abort(),this.timeoutMs);
   try{
-   const response=await this.fetcher(SHOPIFY_CATALOG_ENDPOINT,{method:'POST',redirect:'error',signal:abort.signal,
+   const response=await this.fetcher(SHOPIFY_CATALOG_ENDPOINT,{method:'POST',redirect:'manual',signal:abort.signal,
     headers:{'content-type':'application/json',accept:'application/json, text/event-stream'},
     body:JSON.stringify({jsonrpc:'2.0',id,method:'tools/call',params:{name:tool,arguments:{meta:{'ucp-agent':{profile}},catalog:parsed.data}}})});
+   // 'manual' (Workers reject 'error'): a redirect is not ok and is refused below.
    if(response.status===429)throw new CatalogError('SHOPIFY_CATALOG_RATE_LIMITED',429);
    if(!response.ok)throw new CatalogError('SHOPIFY_CATALOG_UNAVAILABLE',502);
    const type=response.headers.get('content-type')??'';
