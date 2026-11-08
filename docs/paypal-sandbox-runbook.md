@@ -117,6 +117,17 @@ are rejected. Keep this file untracked. The guard checks local configuration;
 Cloudflare account ownership, deployed queue bindings, consumer health, Neon
 branch, Redis isolation and Durable Object namespace still need operator review.
 
+Upstash Redis is optional for checkout creation. Without it,
+`/api/payments/provider` reports `paypalReadiness.executionLock:
+"DATABASE_ADMISSION"`, and concurrent checkout attempts are serialized by
+`begin_wallet_provider_operation_v11_4_5`, which admits a single CHECKOUT
+transition before any PayPal call. If Redis is configured, both
+`UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` must be set (mode
+`REDIS`). Setting only one of them is reported as
+`UPSTASH_REDIS_PARTIALLY_CONFIGURED` and blocks readiness. Worker builds up to
+`97708e7` required Redis: without it every checkout failed with the generic
+`PAYMENT_OPERATION_FAILED`, before any reservation or PayPal call was made.
+
 Windows PowerShell **5.1**:
 
 ```powershell

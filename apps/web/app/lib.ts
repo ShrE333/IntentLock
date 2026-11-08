@@ -62,10 +62,13 @@ export async function postJson<T>(
   const data = await response.json();
 
   if (!response.ok) {
+    // Payment routes return {error: stage, message: safe code}; show both so the
+    // failing step (checkout, authorize, capture) is visible without DevTools.
+    const stage = typeof data?.error === "string" ? data.error : null;
+    const code = typeof data?.message === "string" ? data.message : null;
     throw new Error(
-      data?.message ??
-      data?.error ??
-      `Request failed (${response.status})`
+      stage && code && stage !== code ? `${stage} · ${code}` :
+      code ?? stage ?? `Request failed (${response.status})`
     );
   }
 

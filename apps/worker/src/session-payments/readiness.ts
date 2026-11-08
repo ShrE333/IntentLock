@@ -1,7 +1,8 @@
 import {recipientMappingConfigured, type RecipientEnv} from '../payments/recipient-binding';
 import {paypalReturnBaseUrl, type PayPalEnv} from './providers/paypal';
+import {sessionPaymentLockMode, type SessionPaymentLockEnv} from './lock';
 
-type ReadinessEnv = PayPalEnv & RecipientEnv & {
+type ReadinessEnv = PayPalEnv & RecipientEnv & SessionPaymentLockEnv & {
   DATABASE_URL?: string;
   APPROVAL_SIGNING_SECRET?: string;
 };
@@ -23,6 +24,10 @@ export function paypalReadiness(env: ReadinessEnv) {
   if (env.APPROVAL_SIGNING_SECRET && env.APPROVAL_SIGNING_SECRET.length < 24)
     issues.push('APPROVAL_SIGNING_SECRET_TOO_SHORT');
   if (!recipientMappingConfigured(env)) issues.push('VERIFIED_RECIPIENT_MAPPING_REQUIRED');
-  return {ready: missing.length === 0 && issues.length === 0, missing, issues,
+  // Redis is optional: PostgreSQL admission is the authoritative execution guard.
+  let executionLock: string;
+  try { executionLock = sessionPaymentLockMode(env); }
+  catch { executionLock = 'MISCONFIGURED'; issues.push('UPSTASH_REDIS_PARTIALLY_CONFIGURED'); }
+  return {ready: missing.length === 0 && issues.length === 0, missing, issues, executionLock,
     verification: 'CONFIGURATION_ONLY_NOT_PROVIDER_VERIFIED' as const};
 }

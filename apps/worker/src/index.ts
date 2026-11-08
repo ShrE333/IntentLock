@@ -65,6 +65,7 @@ type AppEnv = Env &
     RAZORPAY_KEY_ID?: string;
     RAZORPAY_KEY_SECRET?: string;
     RAZORPAY_WEBHOOK_SECRET?: string;
+    PAYPAL_WEBHOOK_ID?: string;
   };
 
 function json(data: unknown, status = 200) {
@@ -658,7 +659,10 @@ const worker = {
         razorpayConfigured: Boolean(
           env.RAZORPAY_KEY_ID && env.RAZORPAY_KEY_SECRET
         ),
-        webhookConfigured: Boolean(env.RAZORPAY_WEBHOOK_SECRET)
+        // Legacy field: Razorpay only. PayPal webhook readiness is in /api/payments/provider.
+        webhookConfigured: Boolean(env.RAZORPAY_WEBHOOK_SECRET),
+        razorpayWebhookConfigured: Boolean(env.RAZORPAY_WEBHOOK_SECRET),
+        paypalWebhookConfigured: Boolean(env.PAYPAL_WEBHOOK_ID?.trim())
       });
     }
 

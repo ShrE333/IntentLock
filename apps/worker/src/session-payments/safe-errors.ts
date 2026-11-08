@@ -9,11 +9,38 @@ const codes=new Set([
   'SESSION_NOT_FOUND','SESSION_PAYMENT_NOT_FOUND','SESSION_NOT_AUTHORIZED_FOR_CAPTURE',
   'SESSION_NOT_AWAITING_PAYPAL_APPROVAL','PAYPAL_AUTHORIZATION_ID_MISSING',
   'PAYPAL_ORDER_ID_MISSING','PAYMENT_PROVIDER_NOT_PAYPAL','RESERVATION_REQUIRED',
-  'OAUTH_TRANSPORT_FAILURE','PAYPAL_TRANSPORT_FAILURE'
+  'OAUTH_TRANSPORT_FAILURE','PAYPAL_TRANSPORT_FAILURE',
+  // Execution preconditions raised by the session payment service.
+  'UPSTASH_REDIS_PARTIALLY_CONFIGURED','SESSION_PAYMENT_ALREADY_IN_PROGRESS',
+  'SELECTED_PRODUCT_NOT_FOUND','WALLET_NOT_FOUND','COMMERCE_CONNECTOR_NOT_AVAILABLE_AT_PAYMENT',
+  'COMMERCE_PRODUCT_NO_LONGER_AVAILABLE','COMMERCE_PRODUCT_OUT_OF_STOCK',
+  'COMMERCE_QUOTE_CHANGED_REAUTHORIZE','ONE_TIME_AUTHORIZATION_REQUIRED',
+  'WALLET_EXPIRES_TOO_SOON_FOR_PAYMENT','STEP_UP_REQUEST_NOT_APPROVED',
+  'COMMERCE_DISCOVERY_ONLY','DEMO_CHECKOUT_SANDBOX_ONLY','PAYPAL_PARTNER_INTEGRATION_NOT_IMPLEMENTED',
+  // Raised by the PostgreSQL reservation functions.
+  'RESERVATION_NOT_EXECUTABLE','RESERVATION_OPERATION_INVALID','RESERVATION_APPROVAL_REQUIRED',
+  'RESERVATION_AMOUNT_INVALID','RESERVATION_IDENTITY_MISMATCH','RESERVATION_TERMINAL',
+  'RESERVATION_SESSION_NOT_READY','RESERVATION_SESSION_WALLET_MISMATCH',
+  'WALLET_AUTHORITY_INACTIVE','WALLET_AVAILABLE_AUTHORITY_EXCEEDED',
+  'LEGACY_PAYMENT_RECONCILIATION_REQUIRED'
 ]);
+// These carry runtime detail after a colon (status, violations, amounts).
+// Only the fixed prefix is returned; the detail is dropped.
+const prefixed=[
+  'SESSION_NOT_READY_TO_PAY','AUTHORITY_CHANGED',
+  'PAYPAL_AUTH_AMOUNT_MISMATCH','PAYPAL_AUTH_CURRENCY_MISMATCH',
+  'PAYPAL_CAPTURE_AMOUNT_MISMATCH','PAYPAL_CAPTURE_CURRENCY_MISMATCH'
+];
+function knownCode(message:string){
+  if(codes.has(message)) return message;
+  // Database drivers may wrap a RAISE EXCEPTION message with a prefix.
+  const raised=message.match(/(?:^|:\s*)([A-Z][A-Z_]+)$/)?.[1];
+  if(raised&&codes.has(raised)) return raised;
+  return prefixed.find(code=>message.startsWith(code+':'))??null;
+}
 export function safePaymentFailure(error:unknown){
   const message=error instanceof Error?error.message:'';
   const provider=message.match(/^PAYPAL_(OAUTH_)?(\d{3}):/);
-  const code=codes.has(message)?message:provider?(provider[1]?'PAYPAL_OAUTH_REJECTED':'PAYPAL_REQUEST_REJECTED'):'PAYMENT_OPERATION_FAILED';
+  const code=provider?(provider[1]?'PAYPAL_OAUTH_REJECTED':'PAYPAL_REQUEST_REJECTED'):knownCode(message)??'PAYMENT_OPERATION_FAILED';
   return {code,message:code,...(provider?{providerStatus:Number(provider[2])}:{})};
 }
