@@ -332,3 +332,56 @@ html{scroll-behavior:smooth}body{margin:0;background:var(--ix-paper)}
 .ix-workspace .commerceCard{background:#fcfdf8!important;border-color:#d8e0d4!important;box-shadow:none!important}
 .ix-workspace .walletRules,.ix-workspace .walletMetrics{gap:10px}
 .ix-workspace a:not(.ix-nav-item):not(.ix-identity):not(.ix-top-primary):not(.ix-command-item):hover{text-underline-offset:4px}
+
+/* ===== AGENT PROPOSAL VS DECISION (new-purchase) ===== */
+.agModeSet{border:0;margin:0 0 16px;padding:0;min-width:0}
+.agModeSet legend{font:650 10px var(--ix-mono);letter-spacing:.12em;text-transform:uppercase;color:var(--ix-muted);padding:0;margin-bottom:8px}
+.agModeGroup{display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--ix-ink)}
+.agModeOpt{position:relative;display:flex;flex-direction:column;gap:4px;padding:12px 14px;cursor:pointer;background:var(--ix-white);min-width:0}
+.agModeOpt+.agModeOpt{border-left:1px solid var(--ix-ink)}
+.agModeOpt input{position:absolute;opacity:0;inset:0;margin:0;cursor:pointer}
+.agModeOpt strong{font-size:13px;color:var(--ix-ink)}
+.agModeOpt small{font-size:11px;line-height:1.5;color:var(--ix-muted)}
+.agModeOpt.on{background:var(--ix-ink)}.agModeOpt.on strong{color:var(--ix-citron)}.agModeOpt.on small{color:#c3cdc3}
+.agModeOpt:focus-within{outline:3px solid #63a876;outline-offset:2px}
+.agModeSet:disabled{opacity:.6}
+.agPanel .sectionTitleRow{align-items:flex-end;gap:12px}
+.agBadge{font:700 10px var(--ix-mono);letter-spacing:.1em;padding:6px 9px;border:1px solid currentColor;white-space:nowrap}
+.agBadgeSim{color:#8e3830;background:#f9ece7}
+.agSplit{display:grid;grid-template-columns:minmax(0,1fr) 36px minmax(0,1fr);align-items:stretch;border:1px solid var(--ix-border);background:var(--ix-white)}
+.agSide{padding:20px 22px;min-width:0}
+.agSide h3{margin:10px 0 14px;font-size:20px;line-height:1.25;letter-spacing:-.03em;color:var(--ix-ink);overflow-wrap:anywhere}
+.agTag{font:650 10px var(--ix-mono);letter-spacing:.12em;color:var(--ix-muted)}
+.agArrow{display:grid;place-items:center;font:22px var(--ix-mono);color:var(--ix-soft);background:var(--ix-paper);border-inline:1px solid var(--ix-border)}
+.agFacts{display:flex;flex-wrap:wrap;gap:8px 26px;margin:0 0 16px}
+.agFacts div{min-width:0}.agFacts dt{font:600 9px var(--ix-mono);letter-spacing:.1em;text-transform:uppercase;color:var(--ix-soft)}
+.agFacts dd{margin:3px 0 0;font-size:14px;font-weight:600;color:var(--ix-ink);overflow-wrap:anywhere}
+.agQuote{margin:0;padding:12px 14px;border-left:3px solid #b9b49a;background:repeating-linear-gradient(135deg,#f4f2e4,#f4f2e4 8px,#f0eedd 8px,#f0eedd 16px)}
+.agQuote figcaption{font:650 9px var(--ix-mono);letter-spacing:.12em;text-transform:uppercase;color:#7a6f3a;margin-bottom:6px}
+.agQuote blockquote{margin:0;font:italic 14px/1.6 Georgia,'Times New Roman',serif;color:#3d3a2a;overflow-wrap:anywhere}
+.agDecision{background:var(--ix-ink);color:var(--ix-white)}
+.agDecision h3{color:var(--ix-white)}.agDecision .agTag{color:#9fb0a4}
+.agDecisionRow{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.agVerdict{font:700 11px var(--ix-mono);letter-spacing:.1em;padding:7px 10px;background:var(--ix-citron);color:#20311d}
+.agVerdict.block{background:#efafa2;color:#512721}.agVerdict.step_up{background:#f7df92;color:#3d2f09}
+.agPrice{font:600 13px var(--ix-mono);color:#d8e2d6}
+.agAgree{margin:14px 0 0;font-size:12px;line-height:1.6;color:#b8c4b9}
+.agOverrule{margin-top:-1px;border:2px solid #8e3830;background:#f9ece7;padding:18px 22px;color:#5c231d}
+.agOverruleHead{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:baseline}
+.agOverruleHead strong{font-size:22px;letter-spacing:-.04em}.agOverruleHead span{font:650 10px var(--ix-mono);letter-spacing:.1em;text-transform:uppercase}
+.agOverrule ul{margin:12px 0 0;padding-left:20px;font-size:14px;line-height:1.65}
+.agNotice{margin:0;padding:14px 18px;border:1px solid #c4d8c5;background:#e6f0e5;color:#35563c;font-size:13px;line-height:1.6}
+@media(max-width:720px){
+  .agModeGroup{grid-template-columns:1fr}.agModeOpt+.agModeOpt{border-left:0;border-top:1px solid var(--ix-ink)}
+  .agSplit{grid-template-columns:1fr}.agArrow{transform:rotate(90deg);height:32px;border-inline:0;border-block:1px solid var(--ix-border)}
+}
+/* ===== END AGENT PROPOSAL VS DECISION ===== */
+
+/* ===== AGENT KILL SWITCH ===== */
+.revokeZone{margin-top:18px;padding:16px 18px;border:1px solid #e5b8ad;background:#f9ece7;display:flex;flex-direction:column;gap:12px;align-items:flex-start}
+.revokeZone strong{color:#8e3830;font-size:14px}.revokeZone p{margin:4px 0 0;font-size:12px;line-height:1.65;color:#5c231d}
+.revokeConfirm{border-top:1px solid #e5b8ad;padding-top:12px;width:100%}
+.revokeActions{display:flex;gap:10px;flex-wrap:wrap;margin-top:10px}
+.revokeButton{background:#8e3830;color:#fff;border:1px solid #8e3830}.revokeButton:hover:not(:disabled){background:#6f2a24}
+.revokeButton:disabled{opacity:.55;cursor:not-allowed}
+/* ===== END AGENT KILL SWITCH ===== */

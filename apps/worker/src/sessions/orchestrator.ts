@@ -7,9 +7,11 @@ import {authorizeProductContext,type AuthorizationContextEnv} from "../payments/
 import {planCommerceSearchQuery} from "../commerce/query-planner";
 import {assessAndTighten} from '../risk/tighten';
 import {transactionFromAuthorizationContext} from '../payments/authorization-context';
+import {recommendCandidates,type AgentEnv,type AgentMode,type AgentRecommendation} from "../agent/shopping-agent";
+import {containsPromptInjection} from "../risk/engine";
 import {addEvent,addEvents,getEvents,getSession,updateSession,claimSessionRun} from "./repository";
 
-type Env=AuthorizationContextEnv & CommerceEnv & {
+type Env=AuthorizationContextEnv & CommerceEnv & AgentEnv & {
   DATABASE_URL:string;
   APPROVAL_SIGNING_SECRET?:string;
 };
@@ -24,7 +26,9 @@ type EvaluatedCandidate={
   walletCurrency:string;
 };
 
-export async function runPurchaseSession(env:Env,sessionId:string){
+export type AgentOutcome=AgentRecommendation & {overruled:boolean;overruleReasons:string[];selectedProductId:string|null};
+
+export async function runPurchaseSession(env:Env,sessionId:string,options:{agentMode?:AgentMode}={}){
   const session=await getSession(env.DATABASE_URL,sessionId);
   if(!session) throw new Error("SESSION_NOT_FOUND");
   if(session.connectorId==='shopify-global-catalog')throw new Error('COMMERCE_DISCOVERY_ONLY');
@@ -57,7 +61,7 @@ export async function runPurchaseSession(env:Env,sessionId:string){
       connector:connector.info().name,searchQuery:discoveryQuery,
       reason:"Marketplace returned no candidates; this is not a wallet-policy rejection."
     });
-    return {session:await getSession(env.DATABASE_URL,sessionId),events:await getEvents(env.DATABASE_URL,sessionId),candidates:[]};
+    return {session:await getSession(env.DATABASE_URL,sessionId),events:await getEvents(env.DATABASE_URL,sessionId),candidates:[],agent:null as AgentOutcome|null};
   }
 
   const evaluated:EvaluatedCandidate[]=[];
@@ -136,10 +140,33 @@ export async function runPurchaseSession(env:Env,sessionId:string){
     }});
   }
 
-  // Preserve connector relevance order. The old implementation re-sorted by
-  // wallet cost, which effectively hard-coded "cheapest wins" even when the
-  // marketplace ranked another listing as a better match to the user's request.
-  const chosen=evaluated.find(x=>x.decision==='ALLOW')??evaluated.find(x=>x.decision==='STEP_UP');
+  // The agent's ranking is untrusted advice: it can only reorder candidates that
+  // policy already evaluated. Selection still requires ALLOW (else STEP_UP).
+  const agentRec=await recommendCandidates(env,{
+    goal:session.userPrompt,mode:options.agentMode??'live',
+    candidates:evaluated.map(e=>({
+      id:e.product.id,title:e.product.title,brand:e.product.brand,category:e.product.category,
+      price:e.product.price,currency:e.product.currency,merchant:e.product.merchant,
+      features:e.product.features,merchantMessage:e.product.merchantMessage
+    }))
+  });
+  const agentOk=agentRec.status==='OK';
+  const ordered=agentOk?[
+    ...agentRec.rankedProductIds.map(id=>evaluated.find(e=>e.product.id===id)).filter((e,k,a):e is EvaluatedCandidate=>!!e&&a.indexOf(e)===k),
+    ...evaluated.filter(e=>!agentRec.rankedProductIds.includes(e.product.id))
+  ]:evaluated;
+  // Without an agent order this preserves connector relevance order (no cheapest-wins re-sort).
+  const chosen=ordered.find(x=>x.decision==='ALLOW')??ordered.find(x=>x.decision==='STEP_UP');
+  const recommended=agentRec.recommendedProductId?evaluated.find(e=>e.product.id===agentRec.recommendedProductId):undefined;
+  // Captured before risk tightening, which mutates chosen (possibly the same object).
+  const recommendedPolicyDecision=recommended?.decision??null;
+  trace.push({type:'AGENT_RECOMMENDATION',payload:{
+    mode:agentRec.mode,simulated:agentRec.simulated,status:agentRec.status,model:agentRec.model,
+    recommendedProductId:agentRec.recommendedProductId,proposedQuantity:agentRec.proposedQuantity,
+    rankedProductIds:agentRec.rankedProductIds,rationale:agentRec.rationale,
+    ...(agentRec.unavailableReason?{unavailableReason:agentRec.unavailableReason}:{}),
+    trust:'UNTRUSTED_MODEL_OUTPUT'
+  }});
   if(chosen?.product.authorizationContext){
     const tx=transactionFromAuthorizationContext(chosen.product,chosen.product.authorizationContext);
     const tightened=await assessAndTighten(env.DATABASE_URL,{
@@ -154,6 +181,21 @@ export async function runPurchaseSession(env:Env,sessionId:string){
   }
   const allowed=chosen?.decision==='ALLOW'?[chosen]:[];
   const stepUps=chosen?.decision==='STEP_UP'?[chosen]:[];
+  // Overrule is judged against the final selection, after risk tightening.
+  const selectedProductId=allowed.length||stepUps.length?chosen!.product.id:null;
+  const riskTightened=!!recommended&&recommended===chosen&&recommendedPolicyDecision==='ALLOW'&&chosen.decision!=='ALLOW';
+  const overruleReasons:string[]=[];
+  if(recommended&&recommendedPolicyDecision!=='ALLOW') overruleReasons.push(`RECOMMENDED_CANDIDATE_${recommendedPolicyDecision}`,...recommended.violations);
+  if((agentRec.proposedQuantity??1)>1) overruleReasons.push('QUANTITY_EXCEEDS_DELEGATION');
+  if(recommended&&containsPromptInjection(recommended.product.merchantMessage)) overruleReasons.push('MERCHANT_TEXT_INJECTION_SUSPECTED');
+  if(riskTightened) overruleReasons.push(`RISK_TIGHTENED_TO_${chosen!.decision}`);
+  if(recommended&&recommended.product.id!==selectedProductId) overruleReasons.push('DIFFERENT_AUTHORIZED_CANDIDATE_SELECTED');
+  // Injection text alone annotates; overrule means the proposal did not execute as proposed.
+  const overruled=!!recommended&&(recommendedPolicyDecision!=='ALLOW'||(agentRec.proposedQuantity??1)>1||riskTightened||recommended.product.id!==selectedProductId);
+  if(overruled) trace.push({type:'AGENT_RECOMMENDATION_OVERRULED',payload:{
+    recommendedProductId:agentRec.recommendedProductId,proposedQuantity:agentRec.proposedQuantity,
+    policyDecision:recommendedPolicyDecision,overruleReasons,selectedProductId
+  }});
 
   if(allowed.length){
     const selected=allowed[0];
@@ -165,7 +207,7 @@ export async function runPurchaseSession(env:Env,sessionId:string){
       presentmentAmount:selected.product.price,presentmentCurrency:selected.product.currency,
       walletAmount:selected.walletAmount,walletCurrency:selected.walletCurrency,
       payeeFingerprint:selected.product.authorizationContext?.payeeLock?.fingerprint??null,
-      reason:"BEST_AUTHORIZED_MATCH_IN_DISCOVERY_ORDER"
+      reason:agentOk?"BEST_AUTHORIZED_MATCH_IN_AGENT_ORDER":"BEST_AUTHORIZED_MATCH_IN_DISCOVERY_ORDER"
     }});
     trace.push({type:"AUTO_AUTHORIZED",payload:{
       productId:selected.product.id,walletAmount:selected.walletAmount,walletCurrency:selected.walletCurrency,
@@ -195,7 +237,7 @@ export async function runPurchaseSession(env:Env,sessionId:string){
       presentmentAmount:selected.product.price,presentmentCurrency:selected.product.currency,
       walletAmount:selected.walletAmount,walletCurrency:selected.walletCurrency,
       payeeFingerprint:c.payeeLock?.fingerprint??null,
-      reason:"BEST_STEP_UP_MATCH_IN_DISCOVERY_ORDER"
+      reason:agentOk?"BEST_STEP_UP_MATCH_IN_AGENT_ORDER":"BEST_STEP_UP_MATCH_IN_DISCOVERY_ORDER"
     }});
     trace.push({type:"STEP_UP_REQUIRED",payload:{
       requestId:stepUp?.requestId??null,requestedAmount:selected.walletAmount,
@@ -207,7 +249,9 @@ export async function runPurchaseSession(env:Env,sessionId:string){
   }
 
   await addEvents(env.DATABASE_URL,sessionId,trace);
-  return {session:await getSession(env.DATABASE_URL,sessionId),events:await getEvents(env.DATABASE_URL,sessionId),candidates:evaluated};
+  // selectedProductId is the final selection, i.e. after risk tightening.
+  const agent:AgentOutcome={...agentRec,overruled,overruleReasons,selectedProductId};
+  return {session:await getSession(env.DATABASE_URL,sessionId),events:await getEvents(env.DATABASE_URL,sessionId),candidates:evaluated,agent:agent as AgentOutcome|null};
 }
 
 export async function resolveSessionStepUp(env:Env,sessionId:string,action:"ALLOW_ONCE"|"RAISE_LIMIT"|"REJECT"){

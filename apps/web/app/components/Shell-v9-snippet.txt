@@ -1,3 +1,0 @@
-In apps/web/app/components/Shell.tsx add this nav entry:
-
-{ href: "/evals", label: "Evaluations", icon: "▦" },

@@ -108,7 +108,7 @@ export async function handleAuthorizeRoutes(
     const name=String(body?.name??"").trim();
     if(!name) return json({error:"MISSING_NAME"},400);
 
-    const allowedScopes=new Set(['authorize','verify','financial:read','wallet:create','wallet:evaluate','session:create','session:run','stepup:resolve','payment:execute','commerce:search','intent:create','legacy:evaluate','refund:evaluate']);
+    const allowedScopes=new Set(['authorize','verify','financial:read','wallet:create','wallet:evaluate','wallet:revoke','session:create','session:run','stepup:resolve','payment:execute','commerce:search','intent:create','legacy:evaluate','refund:evaluate']);
     const scopes=Array.isArray(body?.scopes)
       ? body.scopes.map(String).filter((x:string)=>allowedScopes.has(x))
       : ["authorize","verify"];

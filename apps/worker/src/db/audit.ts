@@ -16,7 +16,8 @@ export type AuditEventType =
   | "WEBHOOK_DUPLICATE_IGNORED"
   | "PAYMENT_CREATED"
   | "PAYMENT_CAPTURED"
-  | "PAYMENT_FAILED";
+  | "PAYMENT_FAILED"
+  | "WALLET_REVOKED";
 
 export type AuditRow = {
   sequence: number | string;

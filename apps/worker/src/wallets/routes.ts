@@ -1,4 +1,6 @@
-import {createWallet,listWallets,getWallet,recordDecision} from "./repository";
+import {createWallet,listWallets,getWallet,recordDecision,revokeWallet,countInFlightReservations} from "./repository";
+import {neon} from "@neondatabase/serverless";
+import {appendAuditEvent} from "../db/audit";
 import {evaluateWalletTransaction} from "./policy";
 import {issueStepUpRequest,resolveStepUpRequest} from "./stepup";
 import {WalletCreateSchema,WalletTransactionSchema} from './validation';
@@ -84,6 +86,21 @@ export async function handleWalletRoutes(request:Request,env:WalletEnv,url:URL):
       if(!["ALLOW_ONCE","RAISE_LIMIT","REJECT"].includes(action)) return json({error:"INVALID_STEP_UP_ACTION"},400);
       const result=await resolveStepUpRequest(env.DATABASE_URL,env.APPROVAL_SIGNING_SECRET,wallet,requestId,action as "ALLOW_ONCE"|"RAISE_LIMIT"|"REJECT");
       return json({ok:true,walletId,requestId,result});
+    }
+
+    const revokeMatch=url.pathname.match(/^\/api\/wallets\/([^/]+)\/revoke$/);
+    if(request.method==="POST" && revokeMatch){
+      const walletId=decodeURIComponent(revokeMatch[1]);
+      const b:any=await request.json().catch(()=>({}));
+      const reason=typeof b?.reason==="string"?b.reason.replace(/[\u0000-\u001f\u007f-\u009f]/g," ").trim().slice(0,200):"";
+      const result=await revokeWallet(env.DATABASE_URL,walletId);
+      if(!result) return json({error:"WALLET_NOT_FOUND"},404);
+      if(!result.alreadyRevoked){
+        // The transition is already durable and versioned by the policy-history trigger; the hash-chained audit entry is best effort.
+        try{await appendAuditEvent(neon(env.DATABASE_URL),`wallet:${walletId}`,"WALLET_REVOKED",{walletId,reason:reason||null,by:identityOf(env)?.principalId??null});}catch{}
+      }
+      const reservations=await countInFlightReservations(env.DATABASE_URL,walletId);
+      return json({wallet:result.wallet,alreadyRevoked:result.alreadyRevoked,inFlight:{reservations}});
     }
 
     return json({error:"WALLET_ROUTE_NOT_FOUND"},404);

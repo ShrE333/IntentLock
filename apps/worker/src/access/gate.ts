@@ -3,7 +3,10 @@ import {safeEqualText} from '../authorize/crypto';
 import {ACCESS_CONTEXT,AccessError,DEMO_SCOPES,hasScope,newDemoToken,sha256,type Identity,type Permission} from './identity';
 import * as store from './repository';
 
-export type FinancialAccessEnv={DATABASE_URL?:string;DEMO_ACCESS_ENABLED?:string;PAYPAL_ENV?:string;TRUSTOPS_ADMIN_TOKEN?:string;INTENTLOCK_ADMIN_KEY?:string;SHOPIFY_GLOBAL_CATALOG_ENABLED?:string};
+export type FinancialAccessEnv={DATABASE_URL?:string;DEMO_ACCESS_ENABLED?:string;PAYPAL_ENV?:string;TRUSTOPS_ADMIN_TOKEN?:string;INTENTLOCK_ADMIN_KEY?:string;SHOPIFY_GLOBAL_CATALOG_ENABLED?:string;DEMO_ISSUE_PER_IP_PER_HOUR?:string;DEMO_ISSUE_GLOBAL_PER_HOUR?:string;DEMO_WALLETS_PER_PRINCIPAL_PER_HOUR?:string;DEMO_WALLETS_PER_IP_PER_HOUR?:string};
+// Strict integer parse in [1,max]; anything else falls back to the default (never unlimited).
+export function demoLimit(raw:unknown,def:number,max=1000):number{if(typeof raw!=='string'||!/^\d{1,5}$/.test(raw.trim()))return def;const n=Number(raw.trim());return Number.isSafeInteger(n)&&n>=1&&n<=max?n:def;}
+export const demoRateLimits=(env:FinancialAccessEnv)=>({issuePerIp:demoLimit(env.DEMO_ISSUE_PER_IP_PER_HOUR,3),issueGlobal:demoLimit(env.DEMO_ISSUE_GLOBAL_PER_HOUR,200,10000),walletsPerPrincipal:demoLimit(env.DEMO_WALLETS_PER_PRINCIPAL_PER_HOUR,2),walletsPerIp:demoLimit(env.DEMO_WALLETS_PER_IP_PER_HOUR,6)});
 const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:{'content-type':'application/json','cache-control':'no-store'}});
 const bearer=(r:Request)=>r.headers.get('authorization')?.match(/^Bearer ([^\s]+)$/i)?.[1]??r.headers.get('x-intentlock-key')??'';
 const sandbox=(env:FinancialAccessEnv)=>env.DEMO_ACCESS_ENABLED==='true'&&String(env.PAYPAL_ENV??'sandbox').toLowerCase()==='sandbox';
@@ -39,6 +42,7 @@ export function accessRule(path:string,method:string):Rule|null{
  if((m=path.match(/^\/api\/wallet-authority\/history\/([^/]+)$/))&&get)return {scope:'financial:read',kind:'wallet',id:m[1],permission:'read'};
  if(path==='/api/wallets')return post?{scope:'wallet:create'}:get?{scope:'financial:read'}:null;
  if((m=path.match(/^\/api\/wallets\/([^/]+)\/evaluate$/))&&post)return {scope:'wallet:evaluate',kind:'wallet',id:m[1],permission:'authorize'};
+ if((m=path.match(/^\/api\/wallets\/([^/]+)\/revoke$/))&&post)return {scope:'wallet:revoke',kind:'wallet',id:m[1],permission:'approve'};
  if((m=path.match(/^\/api\/wallets\/([^/]+)\/step-up\/[^/]+\/resolve$/))&&post)return {scope:'stepup:resolve',kind:'wallet',id:m[1],permission:'approve'};
  if(path==='/api/sessions')return post?{scope:'session:create',kind:'wallet',bodyKey:'walletId',permission:'execute'}:get?{scope:'financial:read'}:null;
  if((m=path.match(/^\/api\/sessions\/([^/]+)(?:\/(run|step-up\/resolve|payment(?:-link)?(?:\/(?:authorize|capture))?|proof))?$/))){
@@ -84,7 +88,7 @@ export async function secureFinancialRequest<T extends FinancialAccessEnv>(reque
    if(!await store.rateLimit(db,`request-ip:${ip}`,120,60))throw new AccessError(429,'RATE_LIMITED');
    if(path==='/api/access/demo'&&request.method==='POST'){
      if(!sandbox(env))throw new AccessError(503,'SANDBOX_ACCESS_DISABLED');
-     if(!await store.rateLimit(db,`issue:${ip}`,3,3600)||!await store.rateLimit(db,'issue:global',200,3600))throw new AccessError(429,'DEMO_ISSUANCE_LIMIT');
+     if(!await store.rateLimit(db,`issue:${ip}`,demoRateLimits(env).issuePerIp,3600)||!await store.rateLimit(db,'issue:global',demoRateLimits(env).issueGlobal,3600))throw new AccessError(429,'DEMO_ISSUANCE_LIMIT');
      const token=newDemoToken();const principal=`demo:${crypto.randomUUID()}`;const expiresAt=new Date(Date.now()+30*60000).toISOString();
      await store.createCapability(db,await sha256(token),principal,expiresAt);return json({token,expiresAt,scopes:DEMO_SCOPES},201);
    }
@@ -126,7 +130,7 @@ export async function secureFinancialRequest<T extends FinancialAccessEnv>(reque
      if(rule.kind==='session'&&id&&!await store.isDemoSession(db,id))throw new AccessError(403,'DEMO_CONNECTOR_ONLY');
      if(path==='/api/wallets'&&request.method==='POST'){
        if(body?.currency!=='USD'||body?.totalAuthority>100||body?.maxSingleTransaction>100||Date.parse(body?.validUntil)>Date.now()+86400000)throw new AccessError(403,'DEMO_AUTHORITY_LIMIT');
-       if(!await store.rateLimit(db,`wallet:${identity.principalId}`,2,3600)||!await store.rateLimit(db,`wallet-ip:${ip}`,6,3600))throw new AccessError(429,'DEMO_WALLET_LIMIT');
+       if(!await store.rateLimit(db,`wallet:${identity.principalId}`,demoRateLimits(env).walletsPerPrincipal,3600)||!await store.rateLimit(db,`wallet-ip:${ip}`,demoRateLimits(env).walletsPerIp,3600))throw new AccessError(429,'DEMO_WALLET_LIMIT');
      }
      if((path==='/api/sessions'||path==='/api/commerce/search')&&request.method==='POST'&&body?.connectorId!=='paypal-demo-marketplace'
        &&!(path==='/api/commerce/search'&&body?.connectorId==='shopify-global-catalog'&&env.SHOPIFY_GLOBAL_CATALOG_ENABLED==='true'))throw new AccessError(403,'DEMO_CONNECTOR_ONLY');
@@ -144,7 +148,7 @@ export async function secureFinancialRequest<T extends FinancialAccessEnv>(reque
    if(path.startsWith('/api/wallet-authority/')&&request.method==='POST'){
      if(!await store.rateLimit(db,`wallet-compiler:${identity.principalId}`,6,60)||!await store.rateLimit(db,'wallet-compiler:global',60,60))throw new AccessError(429,'WALLET_COMPILER_RATE_LIMITED');
      if(path==='/api/wallet-authority/confirm'&&identity.kind==='demo'){
-       if(!await store.rateLimit(db,`wallet:${identity.principalId}`,2,3600)||!await store.rateLimit(db,`wallet-ip:${ip}`,6,3600))throw new AccessError(429,'DEMO_WALLET_LIMIT');
+       if(!await store.rateLimit(db,`wallet:${identity.principalId}`,demoRateLimits(env).walletsPerPrincipal,3600)||!await store.rateLimit(db,`wallet-ip:${ip}`,demoRateLimits(env).walletsPerIp,3600))throw new AccessError(429,'DEMO_WALLET_LIMIT');
      }
    }
    const effective={...env,[ACCESS_CONTEXT]:identity,...(identity.kind==='demo'?{PAYMENT_PROVIDER:'paypal',PAYPAL_ENV:'sandbox'}:{})};

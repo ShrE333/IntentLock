@@ -82,3 +82,10 @@ REFUND_BLOCK_ON_OPEN_DISPUTE=true
 BUILD_ENVIRONMENT=development
 # Enable the draft/review/explicit-confirm wallet policy workflow.
 NATURAL_LANGUAGE_WALLETS_ENABLED=true
+
+# Demo (sandbox) rate limits per hour. Integers only; invalid/missing/out-of-range values fall back to the default.
+# Raise DEMO_ISSUE_PER_IP_PER_HOUR for hackathon venues where many judges share one IP.
+# DEMO_ISSUE_PER_IP_PER_HOUR=3            # capability issuance per IP, 1-1000
+# DEMO_ISSUE_GLOBAL_PER_HOUR=200          # capability issuance across all IPs, 1-10000
+# DEMO_WALLETS_PER_PRINCIPAL_PER_HOUR=2   # demo wallets per demo principal, 1-1000
+# DEMO_WALLETS_PER_IP_PER_HOUR=6          # demo wallets per IP, 1-1000

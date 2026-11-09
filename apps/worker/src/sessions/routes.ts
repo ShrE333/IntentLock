@@ -5,6 +5,7 @@ import {connectorStatus,type CommerceEnv} from "../commerce/registry";
 import type {AuthorizationContextEnv} from "../payments/authorization-context";
 import {addEvent,createSession,getEvents,getSession,listSessions} from "./repository";
 import {runPurchaseSession,resolveSessionStepUp} from "./orchestrator";
+import type {AgentEnv,AgentMode} from '../agent/shopping-agent';
 import {listPrincipal} from '../access/identity';
 
 const headers={
@@ -15,7 +16,7 @@ const headers={
 };
 const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers});
 
-type Env=CommerceEnv & AuthorizationContextEnv & {
+type Env=CommerceEnv & AuthorizationContextEnv & AgentEnv & {
   DATABASE_URL?:string;
   APPROVAL_SIGNING_SECRET?:string;
 };
@@ -85,7 +86,10 @@ export async function handleSessionRoutes(request:Request,env:Env,url:URL):Promi
     const runMatch=url.pathname.match(/^\/api\/sessions\/([^/]+)\/run$/);
     if(request.method==="POST"&&runMatch){
       const sessionId=decodeURIComponent(runMatch[1]);
-      return json(await runPurchaseSession(buildOrchestratorEnv(env),sessionId));
+      const body:any=await request.json().catch(()=>null);
+      const requested=body&&typeof body==='object'?body.agentMode:undefined;
+      if(requested!==undefined&&requested!==null&&requested!=='live'&&requested!=='compromised') return json({error:'INVALID_AGENT_MODE'},400);
+      return json(await runPurchaseSession(buildOrchestratorEnv(env),sessionId,{agentMode:(requested??'live') as AgentMode}));
     }
 
     const resolveMatch=url.pathname.match(/^\/api\/sessions\/([^/]+)\/step-up\/resolve$/);

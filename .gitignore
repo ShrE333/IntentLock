@@ -21,3 +21,4 @@ Thumbs.db
 *.tsbuildinfo
 .npm-cache/
 apps/worker/wrangler.demo.jsonc
+apps/web/debug.log

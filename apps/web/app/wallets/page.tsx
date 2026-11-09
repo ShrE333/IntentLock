@@ -29,6 +29,8 @@ type Resolution={
   expiresAt?:string;newAutoBuyLimit?:number;
 };
 
+type RevokeResult={wallet:Wallet;alreadyRevoked:boolean;inFlight:{reservations:number}};
+
 const csv=(s:string)=>s.split(",").map(x=>x.trim()).filter(Boolean);
 const CURRENCIES=["INR","USD","EUR","GBP","SGD","AUD","CAD","JPY","CHF","HKD","NZD","SEK","NOK","DKK","PLN","CZK","MXN","BRL","ILS","HUF","MYR","TWD","THB","PHP","CNY"];
 const money=(n:number,currency:string)=>new Intl.NumberFormat("en-US",{
@@ -42,6 +44,8 @@ export default function WalletsPage(){
   const [evaluation,setEvaluation]=useState<Evaluation|null>(null);
   const [stepUp,setStepUp]=useState<StepUpRequest|null>(null);
   const [resolution,setResolution]=useState<Resolution|null>(null);
+  const [confirmRevoke,setConfirmRevoke]=useState(false);
+  const [revokeResult,setRevokeResult]=useState<RevokeResult|null>(null);
   const [busy,setBusy]=useState("");
   const [error,setError]=useState("");
 
@@ -114,6 +118,16 @@ export default function WalletsPage(){
     finally{setBusy("");}
   }
 
+  async function revoke(){
+    if(!selected) return;
+    setBusy("Revoking agent authority…");setError("");
+    try{
+      const r=await postJson<RevokeResult>(`/api/wallets/${encodeURIComponent(selected.walletId)}/revoke`,{reason:"Revoked from wallet console"});
+      setRevokeResult(r);setConfirmRevoke(false);setEvaluation(null);setStepUp(null);setResolution(null);await load();
+    }catch(e){setError(e instanceof Error?e.message:String(e));}
+    finally{setBusy("");}
+  }
+
   return <Shell><div className="page">
     <header className="pageHeader"><div>
       <div className="eyebrow">DELEGATED SPENDING AUTHORITY</div>
@@ -152,7 +166,7 @@ export default function WalletsPage(){
         <div className="cardHeader"><div><h2>Active Wallets</h2><p>Delegated authority currently stored in Neon.</p></div><span className="pill">{wallets.length} TOTAL</span></div>
         <div className="walletList">
           {loading?<div className="walletEmpty" role="status">Loading Intent Wallets...</div>:!wallets.length&&<div className="walletEmpty">No Intent Wallet yet.</div>}
-          {wallets.map(w=>{const expired=new Date(w.validUntil).getTime()<=Date.now();return <button key={w.walletId} className={w.walletId===selectedId?"walletListItem active":"walletListItem"} onClick={()=>{setSelectedId(w.walletId);setEvaluation(null);setStepUp(null);setResolution(null);}}>
+          {wallets.map(w=>{const expired=new Date(w.validUntil).getTime()<=Date.now();return <button key={w.walletId} className={w.walletId===selectedId?"walletListItem active":"walletListItem"} onClick={()=>{setSelectedId(w.walletId);setConfirmRevoke(false);setRevokeResult(null);setEvaluation(null);setStepUp(null);setResolution(null);}}>
             <div><strong>{w.name}</strong><span>{money(w.totalAuthority-w.spentAmount-(w.reservedAmount??0),w.currency)} available · {money(w.reservedAmount??0,w.currency)} reserved · expires {new Date(w.validUntil).toLocaleString()}</span></div><span className="walletStatus">{w.countryCode} · {w.currency} · {w.status!=="ACTIVE"?"REVOKED":expired?"EXPIRED":"READY"}</span>
           </button>;})}
         </div>
@@ -171,6 +185,23 @@ export default function WalletsPage(){
           <Metric label="Excluded Conditions" value={selected.excludedConditions?.join(", ")||"None"}/>
           <Metric label="Valid Until" value={new Date(selected.validUntil).toLocaleString()}/>
         </div>
+        {selected.status==="ACTIVE"&&<div className="revokeZone">
+          <div><strong>Revoke agent authority</strong><p>Instantly withdraw this wallet from every agent that operates within it.</p></div>
+          {!confirmRevoke
+            ?<button className="button revokeButton" onClick={()=>setConfirmRevoke(true)} disabled={!!busy}>Revoke agent authority</button>
+            :<div className="revokeConfirm" role="alertdialog" aria-label="Confirm revocation">
+              <p>New purchases and any not-yet-captured PayPal steps will be refused immediately. Payments already captured will still settle and appear in the ledger. This cannot be undone in the demo; create a new wallet instead.</p>
+              <div className="revokeActions">
+                <button className="button buttonSecondary" onClick={()=>setConfirmRevoke(false)} disabled={!!busy}>Keep authority</button>
+                <button className="button revokeButton" onClick={revoke} disabled={!!busy}>Yes, revoke {selected.name}</button>
+              </div>
+            </div>}
+        </div>}
+        {revokeResult&&revokeResult.wallet.walletId===selected.walletId&&<div className="alert alertError" role="status">
+          {revokeResult.alreadyRevoked?"This wallet was already revoked.":"Agent authority revoked."} {revokeResult.inFlight.reservations>0
+            ?`${revokeResult.inFlight.reservations} in-flight payment reservation${revokeResult.inFlight.reservations===1?"":"s"} will accept no new provider steps; a capture already requested will still settle and appear in the ledger.`
+            :"No payments were in flight."}
+        </div>}
       </article>
 
       {(selected.status!=="ACTIVE"||new Date(selected.validUntil).getTime()<=Date.now())&&<div className="alert alertError" style={{gridColumn:"1 / -1"}}>This wallet cannot start a new purchase because it is {selected.status!=="ACTIVE"?"revoked":"expired"}. Create a fresh wallet instead of testing against stale authority.</div>}

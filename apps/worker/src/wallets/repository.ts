@@ -68,3 +68,16 @@ export async function recordDecision(db:string,walletId:string,tx:WalletTransact
     )`;
   return id;
 }
+
+// Single atomic transition: only an ACTIVE row can be revoked. The v11.5 policy-history trigger snapshots status, so the change is versioned in the same transaction.
+export async function revokeWallet(db:string,walletId:string){
+  const rows=await neon(db)`UPDATE intent_wallets SET status='REVOKED',updated_at=NOW() WHERE wallet_id=${walletId} AND status='ACTIVE' RETURNING *`;
+  if(rows.length) return {wallet:mapWallet(rows[0]),alreadyRevoked:false};
+  const wallet=await getWallet(db,walletId);
+  return wallet?{wallet,alreadyRevoked:true}:null;
+}
+
+export async function countInFlightReservations(db:string,walletId:string){
+  const rows=await neon(db)`SELECT COUNT(*)::int AS n FROM wallet_authority_reservations WHERE wallet_id=${walletId} AND state IN ('RESERVED','RECONCILIATION_REQUIRED')`;
+  return Number(rows[0]?.n??0);
+}

@@ -46,7 +46,13 @@ type Payment={
   provider:"paypal"|"razorpay";providerOrderId:string|null;providerAuthorizationId:string|null;
   providerCaptureId:string|null;checkoutUrl:string|null;amount:number;currency:string;status:string;
 };
-type RunResult={session:Session;events:Event[];candidates:Candidate[];};
+type AgentMode="live"|"compromised";
+type AgentRun={
+  mode:AgentMode;simulated:boolean;status:"OK"|"UNAVAILABLE";model:string|null;rankedProductIds:string[];
+  recommendedProductId:string|null;proposedQuantity:number|null;rationale:string|null;unavailableReason?:string;
+  overruled:boolean;overruleReasons:string[];selectedProductId:string|null;policyDecision?:string|null;
+};
+type RunResult={session:Session;events:Event[];candidates:Candidate[];agent?:AgentRun|null;};
 
 const pretty=(type:string)=>type.replaceAll("_"," ");
 const money=(n:number,currency:string)=>new Intl.NumberFormat("en-US",{
@@ -102,6 +108,39 @@ function friendlyViolation(code:string){
   return map[code]??code.replaceAll("_"," ");
 }
 
+const AGENT_REASONS:Record<string,string>={
+  RECOMMENDED_CANDIDATE_BLOCK:"Wallet policy blocked the product the agent recommended.",
+  RECOMMENDED_CANDIDATE_STEP_UP:"The recommended product needs human step-up, so it cannot be bought autonomously.",
+  QUANTITY_EXCEEDS_DELEGATION:"The agent proposed a quantity beyond what the user delegated.",
+  MERCHANT_TEXT_INJECTION_SUSPECTED:"Merchant text looked like an instruction aimed at the agent, so the proposal was not trusted.",
+  DIFFERENT_AUTHORIZED_CANDIDATE_SELECTED:"IntentLock selected a different candidate that policy authorizes."
+};
+function agentReason(code:string){
+  if(AGENT_REASONS[code]) return AGENT_REASONS[code];
+  const known=friendlyViolation(code);
+  return known!==code.replaceAll("_"," ")?known:code;
+}
+const asStr=(v:unknown)=>typeof v==="string"?v:null;
+const asStrArr=(v:unknown)=>Array.isArray(v)?v.filter((x):x is string=>typeof x==="string"):[];
+// Rebuild the agent panel from persisted session events (used after refresh).
+function agentFromEvents(events:Event[],session:Session|null):AgentRun|null{
+  const rec=[...events].reverse().find(e=>e.eventType==="AGENT_RECOMMENDATION");
+  if(!rec) return null;
+  const over=[...events].reverse().find(e=>e.eventType==="AGENT_RECOMMENDATION_OVERRULED");
+  const p=rec.payload,o=over?.payload;
+  const mode:AgentMode=p.mode==="compromised"?"compromised":"live";
+  return {
+    mode,simulated:p.simulated===true,status:p.status==="UNAVAILABLE"?"UNAVAILABLE":"OK",
+    model:asStr(p.model),rankedProductIds:asStrArr(p.rankedProductIds),
+    recommendedProductId:asStr(p.recommendedProductId),
+    proposedQuantity:typeof p.proposedQuantity==="number"?p.proposedQuantity:null,
+    rationale:asStr(p.rationale),unavailableReason:asStr(p.unavailableReason)??undefined,
+    overruled:!!over,overruleReasons:o?asStrArr(o.overruleReasons):[],
+    selectedProductId:o?asStr(o.selectedProductId):(session?.selectedProduct?.id??null),
+    policyDecision:o?asStr(o.policyDecision):(session?.selectedDecision??null)
+  };
+}
+
 export default function AutonomousPurchasePage(){
   const [wallets,setWallets]=useState<Wallet[]>([]);
   const [connectors,setConnectors]=useState<Connector[]>([]);
@@ -117,11 +156,14 @@ export default function AutonomousPurchasePage(){
   const [payment,setPayment]=useState<Payment|null>(null);
   const [paymentBusy,setPaymentBusy]=useState(false);
   const [proofVerified,setProofVerified]=useState(false);
+  const [agentMode,setAgentMode]=useState<AgentMode>("live");
+  const [runAgent,setRunAgent]=useState<AgentRun|null>(null);
   const returnHandled=useRef(false);
 
   const wallet=useMemo(()=>wallets.find(w=>w.walletId===walletId)??null,[wallets,walletId]);
   const connector=useMemo(()=>connectors.find(c=>c.id===connectorId)??null,[connectors,connectorId]);
   const readiness=useMemo(()=>wallet?walletReadiness(wallet):null,[wallet,wallets]);
+  const agent=useMemo(()=>runAgent??agentFromEvents(events,session),[runAgent,events,session]);
   const blockReasons=useMemo(()=>[...new Set(candidates.flatMap(c=>c.decision==="BLOCK"?[...c.violations,...c.reasons]:[]))],[candidates]);
 
   async function load(){
@@ -218,12 +260,12 @@ export default function AutonomousPurchasePage(){
     if(!preflight.ready){setError(preflight.message);return;}
     if(!connectorId){setError("Select an available commerce connector.");return;}
     if(!prompt.trim()){setError("Enter a purchase goal.");return;}
-    setBusy("Starting autonomous purchase session…");setError("");setSession(null);setEvents([]);setCandidates([]);setStepResult(null);setPayment(null);
+    setBusy("Starting autonomous purchase session…");setError("");setSession(null);setEvents([]);setCandidates([]);setStepResult(null);setPayment(null);setRunAgent(null);
     try{
       const created=await postJson<{session:Session;events:Event[]}>("/api/sessions",{walletId,connectorId,prompt,channel:"WEB"});
       setSession(created.session);setEvents(created.events);setBusy("Agent searching, binding FX and evaluating wallet authority…");
-      const run=await postJson<RunResult>(`/api/sessions/${encodeURIComponent(created.session.sessionId)}/run`,{});
-      setSession(run.session);setEvents(run.events);setCandidates(run.candidates);
+      const run=await postJson<RunResult>(`/api/sessions/${encodeURIComponent(created.session.sessionId)}/run`,{agentMode});
+      setSession(run.session);setEvents(run.events);setCandidates(run.candidates);setRunAgent(run.agent??null);
     }catch(e){setError(e instanceof Error?e.message:String(e));}
     finally{setBusy("");}
   }
@@ -303,6 +345,19 @@ export default function AutonomousPurchasePage(){
         </div>}
         {!wallets.some(w=>walletReadiness(w).ready)&&wallets.length>0&&<div className="alert alertError">No existing wallet can start a new payment. Create a fresh wallet or extend authority before testing another transaction.</div>}
         <label className="purchasePrompt"><span>Purchase goal</span><textarea value={prompt} onChange={e=>setPrompt(e.target.value)} rows={5}/></label>
+        <fieldset className="agModeSet" disabled={!!busy}>
+          <legend>Agent mode</legend>
+          <div className="agModeGroup" role="radiogroup" aria-label="Agent mode">
+            <label className={`agModeOpt ${agentMode==="live"?"on":""}`}>
+              <input type="radio" name="agentMode" value="live" checked={agentMode==="live"} onChange={()=>setAgentMode("live")}/>
+              <strong>Live AI agent</strong><small>A real model proposes what to buy. Policy still decides.</small>
+            </label>
+            <label className={`agModeOpt agModeSim ${agentMode==="compromised"?"on":""}`}>
+              <input type="radio" name="agentMode" value="compromised" checked={agentMode==="compromised"} onChange={()=>setAgentMode("compromised")}/>
+              <strong>Simulated compromised agent</strong><small>Simulates a jailbroken agent that obeys merchant text — for demonstrating the firewall.</small>
+            </label>
+          </div>
+        </fieldset>
         <button className="button buttonPrimary buttonWide" onClick={start} disabled={!!busy}>Start Autonomous Purchase</button>
       </article>
 
@@ -331,6 +386,8 @@ export default function AutonomousPurchasePage(){
       </div>
       <p className="textMuted">These outcomes are computed from the selected wallet and returned product facts. They are not hard-coded transaction statuses.</p>
     </article></section>}
+
+    {agent&&<AgentPanel agent={agent} candidates={candidates} session={session} events={events}/>}
 
     {events.length>0&&<section className="sessionSection"><div className="sectionTitleRow"><div><span className="miniLabel">VISIBLE AGENT ACTIVITY</span><h2>Session Trace</h2></div><span className="traceCount">{events.length} EVENTS</span></div>
       <div className="agentTimeline">{events.map((event,index)=><div key={event.eventId} className="timelineEvent"><div className="timelineRail"><span className="timelineDot">{index+1}</span></div><div className="timelineBody"><div className="timelineTop"><strong>{pretty(event.eventType)}</strong><span>{new Date(event.occurredAt).toLocaleTimeString()}</span></div><EventDetails event={event} authorityCurrency={authorityCurrency}/></div></div>)}</div>
@@ -372,6 +429,59 @@ export default function AutonomousPurchasePage(){
 
 function Authority({label,value}:{label:string;value:string}){return <div><span>{label}</span><strong>{value}</strong></div>;}
 function State({label,value}:{label:string;value:string}){return <div className="sessionStateRow"><span>{label}</span><strong>{value}</strong></div>;}
+function AgentPanel({agent,candidates,session,events}:{agent:AgentRun;candidates:Candidate[];session:Session|null;events:Event[]}){
+  const titleOf=(id:string|null)=>{
+    if(!id) return null;
+    const c=candidates.find(x=>x.product.id===id);
+    if(c) return c.product.title;
+    if(session?.selectedProduct?.id===id) return session.selectedProduct.title;
+    const f=events.find(e=>e.eventType==="PRODUCT_FOUND"&&(e.payload.productId===id||e.payload.id===id));
+    return f&&typeof f.payload.title==="string"?f.payload.title:null;
+  };
+  const labelOf=(id:string|null)=>{const t=titleOf(id);return t??(id?`Product ${id}`:null);};
+  const selectedCand=candidates.find(x=>x.product.id===agent.selectedProductId);
+  const selectedTitle=labelOf(agent.selectedProductId);
+  const decision=agent.policyDecision??session?.selectedDecision??(agent.selectedProductId?null:"BLOCK");
+  const sim=agent.simulated||agent.mode==="compromised";
+  const headId="ag-head";
+  if(agent.status==="UNAVAILABLE") return <section className="sessionSection agPanel" aria-labelledby={headId}>
+    <div className="sectionTitleRow"><div><span className="miniLabel">AGENT PROPOSAL VS INTENTLOCK DECISION</span><h2 id={headId}>Agent unavailable</h2></div></div>
+    <p className="agNotice" role="status">AI agent unavailable{agent.unavailableReason?` (${agent.unavailableReason})`:""} — fell back to marketplace order; policy unaffected.</p>
+  </section>;
+  return <section className="sessionSection agPanel" aria-labelledby={headId}>
+    <div className="sectionTitleRow"><div><span className="miniLabel">AGENT PROPOSAL VS INTENTLOCK DECISION</span><h2 id={headId}>The agent proposed. Policy decided.</h2></div>
+      {sim&&<span className="agBadge agBadgeSim">SIMULATED</span>}</div>
+    <div className="agSplit">
+      <article className="agSide agProposal">
+        <span className="agTag">AGENT PROPOSED</span>
+        <h3>{labelOf(agent.recommendedProductId)??"No product recommended"}</h3>
+        <dl className="agFacts">
+          <div><dt>Quantity</dt><dd>{agent.proposedQuantity??"—"}</dd></div>
+          <div><dt>Model</dt><dd>{agent.model??(sim?"scripted simulation":"—")}</dd></div>
+        </dl>
+        {agent.rationale&&<figure className="agQuote">
+          <figcaption>Untrusted model output</figcaption>
+          <blockquote>{agent.rationale}</blockquote>
+        </figure>}
+      </article>
+      <div className="agArrow" aria-hidden="true">⟶</div>
+      <article className={`agSide agDecision ${agent.overruled?"overruled":"agreed"}`}>
+        <span className="agTag">INTENTLOCK DECIDED</span>
+        <h3>{agent.selectedProductId?selectedTitle:"Nothing authorized"}</h3>
+        <div className="agDecisionRow">
+          {decision&&<span className={`agVerdict ${decision.toLowerCase()}`}>{decision==="BLOCK"?"BLOCKED":decision==="STEP_UP"?"STEP-UP":decision}</span>}
+          {selectedCand&&<span className="agPrice">{money(selectedCand.walletAmount,selectedCand.walletCurrency)}</span>}
+        </div>
+        {!agent.overruled&&<p className="agAgree">Policy independently authorized the agent&apos;s pick.</p>}
+      </article>
+    </div>
+    {agent.overruled&&<div className="agOverrule" role="alert">
+      <div className="agOverruleHead"><strong>Agent overruled</strong><span>Recommendation ≠ permission</span></div>
+      <ul>{agent.overruleReasons.length?agent.overruleReasons.map(r=><li key={r}>{agentReason(r)}</li>):<li>Policy did not accept the agent&apos;s proposal.</li>}</ul>
+    </div>}
+  </section>;
+}
+
 function EventDetails({event,authorityCurrency}:{event:Event;authorityCurrency:string}){
   const p=event.payload;
   if(event.eventType==="DISCOVERY_QUERY_PLANNED") return <p>Marketplace search query: <strong>{String(p.searchQuery)}</strong>. Wallet rules are evaluated only after discovery.</p>;
@@ -392,5 +502,14 @@ function EventDetails({event,authorityCurrency}:{event:Event;authorityCurrency:s
   if(event.eventType==="PAYMENT_CAPTURED") return <p>Verified capture accepted. Provider moved {money(Number(p.amount),String(p.currency))}; IntentLock wallet debit is {money(Number(p.walletAmount),String(p.walletCurrency))}.</p>;
   if(event.eventType==="WALLET_SPEND_APPLIED") return <p>Wallet debited exactly once: {money(Number(p.amount),String(p.currency))}; replay-safe ledger updated.</p>;
   if(event.eventType==="PROOF_RECEIPT_CREATED") return <p>Cryptographic proof receipt generated.</p>;
+  if(event.eventType==="AGENT_RECOMMENDATION"){
+    const sim=p.simulated===true||p.mode==="compromised";
+    if(p.status==="UNAVAILABLE") return <p>AI agent unavailable{p.unavailableReason?` (${String(p.unavailableReason)})`:""}; fell back to marketplace order. Policy unaffected.</p>;
+    return <p>{sim?"Simulated compromised agent":"AI agent"}{typeof p.model==="string"?` (${p.model})`:""} proposed {p.recommendedProductId?<strong>{String(p.recommendedProductId)}</strong>:"no product"}{typeof p.proposedQuantity==="number"?` × ${p.proposedQuantity}`:""}. <strong>Untrusted model output</strong>; policy decides.</p>;
+  }
+  if(event.eventType==="AGENT_RECOMMENDATION_OVERRULED"){
+    const rs=asStrArr(p.overruleReasons).map(agentReason).join(" · ");
+    return <p><strong>IntentLock overruled the agent.</strong> {p.selectedProductId?<>Selected <strong>{String(p.selectedProductId)}</strong> instead.</>:"Nothing was authorized."}{rs?` ${rs}`:""}</p>;
+  }
   return <p>{pretty(event.eventType)}</p>;
 }

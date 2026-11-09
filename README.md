@@ -1,412 +1,113 @@
 # IntentLock
 
-Release review (2026-11-05): local financial and UI regression coverage is not
-proof of production readiness or a completed provider payment. The implementation
-includes a reviewed natural-language wallet compiler; merchant checkout remains
-restricted to explicitly mapped sandbox demo sellers.
+**AI can decide what to buy. IntentLock decides what money is allowed to do.**
 
-- [Feature inventory](docs/feature-status.md)
-- [Architecture](docs/architecture.md)
-- [Sandbox deployment and rollback](docs/deployment.md)
-- [Security and remaining advisories](docs/security.md)
-- [Testing](docs/testing.md)
-- [Current release gate and blockers](docs/release-readiness.md)
+IntentLock is an authorization firewall for agentic commerce. An AI agent may search, compare and propose a purchase, but its output is treated as untrusted advice. A deterministic layer (recipient binding, FX, wallet policy, risk signals) decides ALLOW, STEP_UP or BLOCK, reserves bounded authority, and only then lets a payment provider move money. Provider responses and browser redirects are never trusted as financial state; only verified, signed provider evidence settles the ledger.
 
-## The Authorization Firewall for Agentic Commerce
+> Reasoning is not authority. Recommendation is not permission. A provider response is not trusted financial state.
 
-**AI can decide what to buy. IntentLock decides what money is actually allowed to do.**
+This is a hackathon entry running on **PayPal Sandbox**. It is not a production payment system (see [Verified status](#verified-status)).
 
-IntentLock sits between probabilistic AI reasoning and deterministic financial execution. A user can express a purchase goal in natural language; the agent can search, compare and propose products; but only IntentLock can grant bounded authority to spend.
-
-> **Reasoning ≠ Authority · Recommendation ≠ Permission · Provider response ≠ trusted financial state**
-
----
-
-## End-to-end pipeline
+## How it works
 
 ```text
-Natural-language user goal
-        ↓
-AI intent understanding / query planning
-        ↓
-Commerce discovery
-Shopify / eBay adapter / demo marketplace
-        ↓
-Structured product + merchant facts
-        ↓
-PayeeLock identity binding
-        ↓
-FX normalization into wallet authority
-        ↓
-Intent Wallet deterministic policy
-        ↓
-ALLOW / STEP_UP / BLOCK
-        ↓
-Payment capability selection
-PayPal / Razorpay
-        ↓
-PayPal AUTHORIZE → revalidate → CAPTURE
-        ↓
-Verified provider webhook
-        ↓
-Replay-safe wallet ledger
-        ↓
-Cryptographic proof receipt
-        ↓
-Reconciliation Watchdog
-        ↓
-Post-purchase controls
-Refund Firewall + dispute evidence
+goal -> discovery -> AI agent proposal (untrusted)
+     -> PayeeLock + FX + wallet policy + risk  => ALLOW | STEP_UP | BLOCK
+     -> authority reservation
+     -> PayPal AUTHORIZE -> buyer approval -> CAPTURE
+     -> signed PayPal webhook -> queue
+     -> exactly-once wallet ledger debit
+     -> HMAC-signed proof receipt
 ```
 
-The LLM is intentionally outside the trusted financial computing base. It may interpret and propose. It does not directly authorize money movement.
+1. **Goal and discovery.** The buyer states a goal; connectors return normalized product facts (demo catalog, PayPal sandbox demo sellers; Shopify/eBay/JSON catalogs are discovery only).
+2. **AI agent proposal.** An AI shopping-agent step (new in this release, `apps/worker/src/agent/shopping-agent.ts`) ranks candidates and may propose a product and quantity. Its output is validated and filtered, and every candidate still goes through the deterministic policy. The agent can be wrong or manipulated; it cannot grant itself authority.
+3. **Decision.** PayeeLock binds the recipient, FX normalizes currency (static demo rates), and the wallet policy plus risk signals return ALLOW, STEP_UP (one-time, exact-quote human approval) or BLOCK.
+4. **Reservation.** Authority is reserved atomically in PostgreSQL before any provider call, so concurrent sessions cannot overspend.
+5. **PayPal.** AUTHORIZE, buyer approval, CAPTURE. An uncertain capture stays pending.
+6. **Settlement.** A PayPal webhook is verified through PayPal's signature API, queued, and settled with one ledger debit (idempotent on the event). A signed proof receipt is produced.
 
----
+Details: [docs/architecture.md](docs/architecture.md).
 
-## Natural-language agent input
+## Verified status
 
-A user can start with a goal such as:
+Observed manually by the owner on 2026-11-09 against the demo Worker at commit `58a7cfc`, using PayPal Sandbox:
 
-```text
-Find Sony or Bose wireless ANC headphones under $50.
-Buy automatically if allowed.
-```
+- Real sandbox order created; buyer approved it with a Sandbox Personal account.
+- Authorization, then capture of USD 49.00.
+- PayPal webhook `PAYMENT.CAPTURE.COMPLETED` verified by PayPal's signature API, queued, and settled with exactly one wallet ledger debit.
+- Signed proof receipt created; session reached CAPTURED.
+- A second delivery of the same event was idempotent (no second debit).
+- Worker test suite: 746 tests passing locally at that point.
 
-IntentLock separates that request into two responsibilities:
+**Not done / not verified:**
 
-1. **Discovery** — derive a clean marketplace query and find relevant products.
-2. **Authority** — evaluate the returned structured facts against deterministic wallet policy.
+- Production readiness. This is sandbox only.
+- Real merchant onboarding; recipients are server-mapped sandbox demo sellers.
+- Live FX; rates are static demo values.
+- Refunds and disputes have not been exercised against real PayPal (only tests and local ledgers).
+- WhatsApp (WAHA), eBay, Shopify and Razorpay have not been verified end to end.
+- The AI shopping-agent step is new and its behavior depends on the configured model; it is advisory only.
 
-Wallet policy is not injected into marketplace search, so the system cannot silently manufacture an ALLOW result by hiding disallowed candidates.
+Per-feature status and evidence gaps: [docs/feature-status.md](docs/feature-status.md).
 
-Natural-language **purchase goals** and a bounded **authority compiler** are implemented. The compiler creates a draft, requests missing controls, supports review/simulation, and requires explicit human confirmation before activation. Unknown restrictions and contradictory instructions fail closed; it does not understand arbitrary language.
-
----
-
-## Intent Wallets
-
-An Intent Wallet is a delegated authority envelope, not a bank account. It defines exactly what an agent may do on a user's behalf.
-
-Current controls include:
-
-- total spending authority
-- remaining authority
-- autonomous purchase limit
-- hard per-transaction ceiling
-- allowed categories
-- allowed brands
-- blocked brands
-- required features
-- wallet currency and buyer country
-- expiry and revocation
-- human step-up for exact-quote one-time approval
-
-The same transaction can become `ALLOW`, `STEP_UP`, or `BLOCK` depending on actual wallet data. The decision engine is deterministic and independently regression-tested.
-
----
-
-## PayeeLock
-
-PayeeLock binds structured merchant/payee identity into the authorization context before payment.
-
-It provides:
-
-- provider + payee identity binding
-- merchant-country binding
-- SHA-256 payee fingerprint
-- execution-time identity revalidation
-- payee-substitution blocking
-- optional trusted-payee registry
-- observation and enforcement modes
-
-For eBay, the current identity is the structured seller username returned by the API. It is a marketplace seller identity, not a bank-verified legal beneficiary identity.
-
----
-
-## Multi-currency authority
-
-Merchant presentment currency and wallet authority currency may differ.
-
-Example:
-
-```text
-Merchant quote:  USD 49.00
-Intent Wallet:   INR
-Bound FX quote:  83.5 INR/USD
-Authority cost:  INR 4,091.50
-```
-
-FX facts are bound before policy evaluation and revalidated before sensitive payment transitions. Demo-static FX is explicitly labeled as demo data; the architecture also supports a live quote source.
-
----
-
-## Payments
-
-### PayPal
-
-The PayPal path uses:
-
-```text
-Order with intent=AUTHORIZE
-        ↓
-Buyer approval
-        ↓
-Authorization hold
-        ↓
-Commerce + FX + policy + payee revalidation
-        ↓
-Capture request
-        ↓
-Verified PayPal webhook
-        ↓
-Wallet debit exactly once
-        ↓
-Proof receipt
-```
-
-A browser redirect or successful API call cannot directly mark a transaction `CAPTURED`.
-
-Historical development notes report a sandbox transaction. This session has not verified a real provider transaction; the current release gate requires an isolated end-to-end sandbox run with genuine credentials and verified event delivery.
-
-### Razorpay
-
-Razorpay remains available as an alternate payment rail with verified webhook handling and idempotent execution.
-
----
-
-## Commerce connectors
-
-Implemented connector architecture includes:
-
-- demo marketplace
-- PayPal multi-currency demo marketplace
-- Shopify Storefront connector
-- external JSON catalog connector
-- eBay Browse connector
-
-The eBay adapter implements OAuth, search, item details, seller identity, structured aspects and payment-time revalidation. **Live eBay production use remains dependent on external eBay API approval/credentials.** IntentLock does not claim that a separate PayPal checkout fulfills an eBay listing.
-
----
-
-## TrustOps
-
-TrustOps keeps the transaction under control after checkout.
-
-### Reconciliation Watchdog
-
-It compares:
-
-```text
-PurchaseSession
-↕
-Provider payment state
-↕
-Wallet ledger
-↕
-Proof receipt
-```
-
-and classifies transactions as healthy, pending, stale, closed or drifted. A protected recovery action replays only already-persisted verified PayPal capture evidence; it never creates a new payment during reconciliation.
-
-### Dispute Defense
-
-IntentLock can reconstruct a dispute evidence packet from the original transaction:
-
-- user intent
-- wallet authority
-- policy decision
-- exact product/merchant
-- PayeeLock binding
-- provider IDs
-- verified capture evidence
-- wallet ledger
-- proof receipt
-- audit-chain state
-
-PayPal dispute discovery/detail APIs are integrated. IntentLock deliberately does not fabricate shipping or fulfillment evidence.
-
----
-
-## Refund Firewall
-
-V11.4 extends deterministic controls beyond capture.
-
-Before a refund is allowed, IntentLock checks:
-
-- original session was captured
-- provider payment is complete
-- currency matches the original capture
-- cumulative refunds cannot exceed the original payment
-- refund falls inside the configured age window
-- unresolved disputes can block automatic refunding
-- historical wallet authority restoration is calculated from the original authorization context
-
-Provider POST success does not immediately restore wallet authority. IntentLock verifies refund state from PayPal, then applies a replay-safe wallet credit.
-
-### V11.4.1 reliability hardening
-
-V11.4.1 adds two important safeguards:
-
-1. **Unknown refund outcome remains unknown.** Network failures, timeouts, 5xx responses, rate limits and other ambiguous provider outcomes keep the local refund reservation in `REQUESTED`. Retrying uses the exact same `PayPal-Request-Id` rather than converting an uncertain financial state into a false failure.
-2. **Final partial refunds close exactly.** When several cross-currency partial refunds would otherwise leave a one-cent rounding residue, the final refund restores the exact remaining historical wallet debit.
-
----
-
-## Security invariants
-
-IntentLock is built around these invariants:
-
-- merchant text is untrusted data, never financial authority
-- wallet policy may restrict a recommendation but cannot be bypassed by the model
-- risk may tighten authority but may never expand it
-- payment creation is idempotent
-- one-time approvals are exact-quote bound
-- payee identity is rebound and revalidated
-- capture is webhook-gated
-- replayed provider evidence cannot double-debit a wallet
-- refund reconciliation cannot double-credit a wallet
-- operator money-moving actions require a backend-only `TRUSTOPS_ADMIN_TOKEN`
-
----
-
-## Main product surfaces
-
-```text
-/                 Overview
-/new-purchase     Natural-language purchase pipeline
-/wallets          Intent Wallets and policy simulator
-/commerce         Commerce discovery
-/trust-center     Transaction Control / TrustOps
-/post-purchase    Refund Firewall and dispute guard
-/proof/...        Proof Receipts
-/demo             WhatsApp entry channel
-/security-lab     Adversarial scenarios
-/evals            Evaluation suite
-/audit            Audit-chain inspection
-/how-it-works     Architecture walkthrough
-```
-
-WhatsApp is an input channel into the same PurchaseSession pipeline; it is not a separate payment system.
-
----
-
-## Stack
+## Architecture and stack
 
 | Layer | Technology |
 |---|---|
-| Frontend | Next.js 15, React 19, TypeScript |
-| Hosting | Vercel |
-| Backend | Cloudflare Workers |
-| Agent runtime | Durable Objects / Agents |
-| AI | Cloudflare Workers AI |
-| Async settlement | Cloudflare Queues |
-| Database | Neon PostgreSQL |
-| Idempotency | Upstash Redis |
-| Payments | PayPal + Razorpay |
-| Commerce | Shopify + eBay adapter + provider-neutral connectors |
-| Messaging | WhatsApp via WAHA |
-| Integrity | HMAC-SHA256 + SHA-256 audit/proof chains |
-| Testing | Vitest + PGlite |
+| Web app | Next.js 15 / React 19 (`apps/web`) |
+| API and policy engine | Cloudflare Worker, TypeScript (`apps/worker`) |
+| Async settlement | Cloudflare Queues; Durable Object for agent state |
+| Database | Neon PostgreSQL (atomic reservation, ledger and uniqueness constraints) |
+| Payments | PayPal Sandbox (AUTHORIZE then CAPTURE, signed webhooks) |
+| AI | Workers AI model for the shopping-agent step (untrusted proposals) |
+| Tests | Vitest (worker, PGlite SQL suites), Playwright (web) |
 
----
+## Repository map
 
-## Local setup
-
-```bash
-git clone https://github.com/ShrE333/IntentLock.git
-cd IntentLock
-npm install
-```
-
-Create local backend configuration in:
-
-```text
-apps/worker/.dev.vars
-```
-
-Never commit that file. The repository contains only `.dev.vars.example` placeholders.
-
-Run the Worker:
-
-```bash
-npm run dev:worker
-```
-
-Run the web app in another terminal:
-
-```bash
-npm run dev:web
-```
-
-Run tests:
-
-```bash
-npm test
-```
-
-Production-build the frontend:
-
-```bash
-npm --workspace apps/web run build
-```
-
-Dry-run the Worker bundle:
-
-```bash
-cd apps/worker
-npx wrangler deploy --dry-run --outdir .wrangler/ci-dry-run
-```
-
----
-
-## Historical verification status (not the current release gate)
-
-The V11.4 checkpoint was manually validated with:
-
-```text
-40 test files passed
-208 / 208 tests passed
-Cloudflare Worker dry-run passed
-Vercel frontend check passed
-```
-
-V11.4.1 adds targeted refund-reliability and TrustOps-CORS regression tests plus GitHub Actions CI. Run the suite after applying the patch; the CI workflow then repeats worker tests, the Next.js production build and Wrangler dry-run on every push/PR.
-
-Test success demonstrates the covered normal/adversarial/failure paths; it is not a guarantee against every possible financial or security failure.
-
----
-
-## Version roadmap
-
-| Version | Main milestone |
+| Path | Contents |
 |---|---|
-| V11.0 | PayPal provider-neutral AUTHORIZE → CAPTURE path |
-| V11.0.1 | Multi-currency authority |
-| V11.0.2 | Resumable capture settlement |
-| V11.0.3 | Late verified capture reconciliation |
-| V11.1 | eBay Browse commerce adapter |
-| V11.2 | PayeeLock + Reconciliation Watchdog + Dispute Defense |
-| V11.3 | Transaction reliability and decision transparency |
-| V11.4 | Refund Firewall + PayPal dispute integration |
-| **V11.4.1** | **Refund ambiguity recovery + rounding closure + CORS + CI/repo integrity** |
-| V11.5 | Bounded natural-language authority compiler with explicit review and confirmation |
+| `apps/web` | Next.js UI: purchase flow, wallets, trust center, proof, security lab |
+| `apps/worker/src/access` | Auth gate: demo capabilities, API keys, scopes, wallet grants, rate limits |
+| `apps/worker/src/sessions`, `agent` | Purchase orchestration and the AI shopping agent |
+| `apps/worker/src/wallets`, `policy`, `risk` | Wallet authority, reservations, policy and risk signals |
+| `apps/worker/src/payments`, `session-payments` | PayPal, PayeeLock, FX, settlement |
+| `apps/worker/src/commerce`, `catalog` | Connectors and catalogs |
+| `apps/worker/src/queue`, `trust-center`, `post-purchase` | Settlement queue, reconciliation, refunds and disputes |
+| `apps/worker/src/tests` | Worker test suites |
+| `packages/sdk` | Private TypeScript SDK source |
+| `tools/release-v1151` | Release verification tooling |
+| `docs/` | Documentation; `docs/archive/` holds historical release notes |
 
----
+## Local development
 
-## Product thesis
+Requires Node 22. On Windows use `npm.cmd` if PowerShell blocks `npm.ps1`.
 
-```text
-PROBABILISTIC WORLD
-AI agent / merchant data
-        ↓
-INTENTLOCK
-Deterministic trust boundary
-        ↓
-Cryptographic + policy authority
-        ↓
-Payment provider
-        ↓
-MONEY
+```powershell
+npm.cmd ci
+copy apps\worker\.dev.vars.example apps\worker\.dev.vars   # then fill in sandbox values; never commit it
+npm.cmd run dev:worker
+npm.cmd run dev:web
 ```
 
-**Do not give an AI unrestricted payment authority. Give it bounded, reviewable and provable authority.**
+Tests and checks:
+
+```powershell
+npm.cmd test                                              # worker tests (vitest)
+npm.cmd --workspace apps/worker run typecheck             # tsc --noEmit --strict
+npm.cmd --workspace apps/web run build
+npm.cmd --workspace apps/web run test:browser             # Playwright
+npm.cmd --workspace apps/worker run check:paypal          # sandbox readiness diagnostics
+```
+
+Demo rate limits (capability issuance, demo wallets per hour) are configurable for shared-IP venues through `DEMO_ISSUE_PER_IP_PER_HOUR`, `DEMO_ISSUE_GLOBAL_PER_HOUR`, `DEMO_WALLETS_PER_PRINCIPAL_PER_HOUR` and `DEMO_WALLETS_PER_IP_PER_HOUR`; invalid values fall back to the defaults. See `apps/worker/.dev.vars.example`.
+
+## Documentation
+
+- [Architecture](docs/architecture.md)
+- [Feature status and evidence](docs/feature-status.md)
+- [PayPal sandbox runbook](docs/paypal-sandbox-runbook.md)
+- [Security and remaining advisories](docs/security.md)
+- [Testing](docs/testing.md)
+- [Deployment and rollback](docs/deployment.md)
+- [Release readiness and blockers](docs/release-readiness.md)
