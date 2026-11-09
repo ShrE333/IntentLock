@@ -38,6 +38,7 @@ Observed manually by the owner on 2026-11-09 against the demo Worker at commit `
 - PayPal webhook `PAYMENT.CAPTURE.COMPLETED` verified by PayPal's signature API, queued, and settled with exactly one wallet ledger debit.
 - Signed proof receipt created; session reached CAPTURED.
 - A second delivery of the same event was idempotent (no second debit).
+- Refund firewall (same day, commit `eb08b63` plus refund fix): an over-refund of USD 100 against the USD 49 capture was returned as BLOCK (`REFUND_EXCEEDS_REMAINING_CAPTURE`) with no provider call; a USD 10 partial refund was executed through PayPal, and wallet authority was restored only after an authenticated PayPal refund read confirmed COMPLETED (one refund-ledger entry, enforced unique per refund).
 - Worker test suite: 746 tests passing locally at that point.
 
 **Not done / not verified:**
@@ -45,7 +46,7 @@ Observed manually by the owner on 2026-11-09 against the demo Worker at commit `
 - Production readiness. This is sandbox only.
 - Real merchant onboarding; recipients are server-mapped sandbox demo sellers.
 - Live FX; rates are static demo values.
-- Refunds and disputes have not been exercised against real PayPal (only tests and local ledgers).
+- Disputes have not been exercised against real PayPal (only tests). A real sandbox refund has been (see Verified status).
 - WhatsApp (WAHA), eBay, Shopify and Razorpay have not been verified end to end.
 - The AI shopping-agent step is new and its behavior depends on the configured model; it is advisory only.
 
@@ -104,6 +105,9 @@ Demo rate limits (capability issuance, demo wallets per hour) are configurable f
 
 ## Documentation
 
+- [Hackathon submission](docs/hackathon/SUBMISSION.md) and [demo script](docs/hackathon/DEMO_SCRIPT.md)
+- [MCP server for external agents](docs/mcp/README.md) (read and evaluate only)
+- [API reference: OpenAPI 3.1 and Postman](docs/api/README.md)
 - [Architecture](docs/architecture.md)
 - [Feature status and evidence](docs/feature-status.md)
 - [PayPal sandbox runbook](docs/paypal-sandbox-runbook.md)

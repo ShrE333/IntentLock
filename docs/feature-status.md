@@ -35,7 +35,7 @@ EXTERNAL BLOCKER can apply together. See testing and release-readiness for resul
 | FX and historical refunds | IMPLEMENTED | `payments/fx.ts`, multi-currency and refund-ledger/reliability suites; static rates explicitly demo, external rate source unverified |
 | PayeeLock / recipient binding | IMPLEMENTED | Registry + fingerprint + expiry/account binding + execution revalidation; recipient regression suites |
 | TrustOps reconciliation / recovery | IMPLEMENTED | Protected routes, verified-evidence replay, late-capture tests; deployed watchdog operations unverified |
-| Refunds / partial refunds / ambiguity | IMPLEMENTED | Firewall/reliability/ledger and PayPal post-purchase tests; actual provider refund not exercised |
+| Refunds / partial refunds / ambiguity | VERIFIED (sandbox, owner-observed 2026-11-09) | Over-refund returned BLOCK with no provider call; USD 10 partial refund executed via PayPal Sandbox and completed through authenticated sync; `refund-evaluate.test.ts` plus firewall/reliability/ledger suites; ambiguous-refund retry not exercised live |
 | Disputes | PARTIAL, EXTERNAL BLOCKER | Provider read APIs and evidence packet exist; shipping/fulfillment evidence deliberately absent |
 | WAHA / WhatsApp | IMPLEMENTED, EXTERNAL BLOCKER | Pairing/HMAC/replay/access/commands tests; WAHA service, session, webhook secrets and wallet grants required; end-to-end delivery unverified |
 | Risk anomaly controls | PARTIAL | Deterministic injection/risk signals tighten authority; no trained anomaly model or validated statistical detection |
@@ -50,3 +50,11 @@ EXTERNAL BLOCKER can apply together. See testing and release-readiness for resul
 
 No feature is represented as externally VERIFIED from historical README results.
 The complete production acceptance criteria across all requested phases remain open.
+
+## Channel3 (discovery only)
+
+| Capability | Status | Notes |
+|---|---|---|
+| Channel3 Product Catalog connector (`channel3-catalog`) | IMPLEMENTED; API ACCESS VERIFIED (operator machine, 2026-11-10) | Real-product search normalized into IntentLock policy evaluation. `npm run check:channel3` returned HTTP 200 in ~3.5 s with 3 real listings from 3 retailer domains. The integration through the deployed Worker (`CHANNEL3_API_KEY` secret + `CHANNEL3_ENABLED=true`) is not yet exercised. The local check prefers IPv4 because some networks' DNS64/NAT64 IPv6 routes stall in Node. |
+| Execution | DISABLED BY DESIGN | Sellers are not verified PayPal payees. Sessions and checkout reject the connector (`COMMERCE_DISCOVERY_ONLY`); results are labelled "Real listing · discovery only". Seller text is untrusted and runs through prompt-injection detection. |
+| Quota protection | IMPLEMENTED | Free tier is 1,000 searches/month; demo searches are limited per principal and globally per hour (`CHANNEL3_SEARCHES_PER_PRINCIPAL_PER_HOUR`, `CHANNEL3_SEARCHES_GLOBAL_PER_HOUR`). |

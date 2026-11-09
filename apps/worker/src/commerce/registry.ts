@@ -4,9 +4,10 @@ import {PayPalDemoMarketplaceConnector} from "./paypal-demo-connector";
 import {EbayBrowseConnector} from "./ebay-connector";
 import {HttpJsonCommerceConnector} from "./http-json-connector";
 import {ShopifyStorefrontConnector} from "./shopify-connector";
+import {Channel3Connector,channel3Enabled,type Channel3Env} from './channel3-connector';
 import {ShopifyGlobalCatalogConnector,shopifyMcpEnabled,type ShopifyMcpEnv} from './shopify-mcp';
 
-export type CommerceEnv=ShopifyMcpEnv & {
+export type CommerceEnv=ShopifyMcpEnv & Channel3Env & {
   COMMERCE_CATALOG_URL?:string;
   SHOPIFY_STORE_DOMAIN?:string;
   SHOPIFY_STOREFRONT_PUBLIC_TOKEN?:string;
@@ -27,6 +28,8 @@ export function getCommerceConnectors(env:CommerceEnv):CommerceConnector[]{
     new DemoMarketplaceConnector()
   ];
   if(shopifyMcpEnabled(env))connectors.push(new ShopifyGlobalCatalogConnector(env));
+
+  if(channel3Enabled(env))connectors.push(new Channel3Connector(env));
 
   if(env.EBAY_CLIENT_ID&&env.EBAY_CLIENT_SECRET){
     connectors.push(new EbayBrowseConnector({
@@ -62,6 +65,7 @@ export function connectorStatus(env:CommerceEnv):CommerceConnectorInfo[]{
   return [
     ...active,
     ...(!shopifyMcpEnabled(env)?[{id:'shopify-global-catalog',name:'Shopify Global Catalog MCP',kind:'SHOPIFY' as const,enabled:false,description:'Read-only live UCP discovery. Disabled by default; no merchant checkout.'}]:[]),
+    ...(!channel3Enabled(env)?[{id:'channel3-catalog',name:'Channel3 Product Catalog',kind:'CHANNEL3' as const,enabled:false,description:'Real product discovery only. Disabled until CHANNEL3_ENABLED and the CHANNEL3_API_KEY secret are set; no checkout.'}]:[]),
     ...(!ebayConfigured?[{
       id:"ebay-browse",name:"eBay Browse",kind:"EBAY" as const,
       enabled:false,description:"Live eBay Browse adapter. Configure EBAY_CLIENT_ID and EBAY_CLIENT_SECRET to enable it."

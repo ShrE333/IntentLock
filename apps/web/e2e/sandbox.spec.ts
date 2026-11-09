@@ -70,7 +70,10 @@ test('wallet loading is distinct from an empty account and navigation works',asy
  await page.route(api+'/api/wallets',async route=>{await pending;await route.continue();});
  await page.goto('/wallets');await expect(page.getByRole('status')).toHaveText('Loading Intent Wallets...');
  release();await expect(page.getByText('No Intent Wallet yet.')).toBeVisible();
- await page.getByRole('navigation',{name:'Product navigation'}).getByRole('link',{name:'Architecture',exact:true}).click();
+ // The redesigned shell keeps navigation in a drawer on small screens.
+ const menu=page.getByRole('button',{name:'Open navigation'});
+ if(await menu.isVisible())await menu.click();
+ await page.getByRole('navigation',{name:'Application navigation'}).getByRole('link',{name:/^Architecture\b/}).click();
  await expect(page).toHaveURL(/\/how-it-works$/);
 });
 test('flagged Shopify catalog shows exact identity, price refresh and non-executable policy',async({page})=>{

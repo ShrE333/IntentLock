@@ -8,6 +8,7 @@ import {planCommerceSearchQuery} from "../commerce/query-planner";
 import {assessAndTighten} from '../risk/tighten';
 import {transactionFromAuthorizationContext} from '../payments/authorization-context';
 import {recommendCandidates,type AgentEnv,type AgentMode,type AgentRecommendation} from "../agent/shopping-agent";
+import {DISCOVERY_ONLY_CONNECTORS} from '../commerce/types';
 import {containsPromptInjection} from "../risk/engine";
 import {addEvent,addEvents,getEvents,getSession,updateSession,claimSessionRun} from "./repository";
 
@@ -31,7 +32,7 @@ export type AgentOutcome=AgentRecommendation & {overruled:boolean;overruleReason
 export async function runPurchaseSession(env:Env,sessionId:string,options:{agentMode?:AgentMode}={}){
   const session=await getSession(env.DATABASE_URL,sessionId);
   if(!session) throw new Error("SESSION_NOT_FOUND");
-  if(session.connectorId==='shopify-global-catalog')throw new Error('COMMERCE_DISCOVERY_ONLY');
+  if(DISCOVERY_ONLY_CONNECTORS.has(session.connectorId))throw new Error('COMMERCE_DISCOVERY_ONLY');
   if(session.status!=='CREATED') throw new Error(`SESSION_NOT_RUNNABLE:${session.status}`);
   const wallet=await getWallet(env.DATABASE_URL,session.walletId);
   if(!wallet) throw new Error("WALLET_NOT_FOUND");

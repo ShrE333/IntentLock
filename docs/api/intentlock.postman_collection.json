@@ -1,0 +1,311 @@
+{
+  "info": {
+    "name": "IntentLock API (sandbox)",
+    "description": "Happy path against the IntentLock sandbox demo: token, wallet, session, run (compromised agent), read, refund evaluation. PayPal Sandbox only. Set baseUrl if you run your own Worker. Run the requests in order.",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "auth": {
+    "type": "bearer",
+    "bearer": [
+      {
+        "key": "token",
+        "value": "{{token}}",
+        "type": "string"
+      }
+    ]
+  },
+  "variable": [
+    {
+      "key": "baseUrl",
+      "value": "https://intentlock-worker-demo.shdixit10.workers.dev"
+    },
+    {
+      "key": "token",
+      "value": ""
+    },
+    {
+      "key": "walletId",
+      "value": ""
+    },
+    {
+      "key": "sessionId",
+      "value": ""
+    },
+    {
+      "key": "validUntil",
+      "value": ""
+    }
+  ],
+  "event": [
+    {
+      "listen": "prerequest",
+      "script": {
+        "type": "text/javascript",
+        "exec": [
+          "// Fresh replay-protection nonce on every POST (required for demo capabilities).",
+          "if (pm.request.method === 'POST') {",
+          "  pm.request.headers.upsert({ key: 'x-intentlock-request-id', value: pm.variables.replaceIn('{{$guid}}') });",
+          "}"
+        ]
+      }
+    }
+  ],
+  "item": [
+    {
+      "name": "1. Get demo token",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('201 issued', () => pm.response.to.have.status(201));",
+              "const b = pm.response.json();",
+              "pm.collectionVariables.set('token', b.token);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "auth": {
+          "type": "noauth"
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/access/demo",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "access",
+            "demo"
+          ]
+        }
+      }
+    },
+    {
+      "name": "2. Create wallet",
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Demo limit: validUntil must be within 24 hours.",
+              "pm.collectionVariables.set('validUntil', new Date(Date.now() + 23 * 3600 * 1000).toISOString());"
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('201 created', () => pm.response.to.have.status(201));",
+              "pm.collectionVariables.set('walletId', pm.response.json().wallet.walletId);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"name\": \"Postman demo wallet\",\n  \"currency\": \"USD\",\n  \"countryCode\": \"US\",\n  \"totalAuthority\": 100,\n  \"autoBuyLimit\": 55,\n  \"maxSingleTransaction\": 75,\n  \"allowedCategories\": [\n    \"electronics\"\n  ],\n  \"allowedBrands\": [\n    \"Sony\",\n    \"Bose\"\n  ],\n  \"blockedBrands\": [\n    \"Boat\"\n  ],\n  \"requiredFeatures\": [\n    \"wireless\",\n    \"ANC\"\n  ],\n  \"validUntil\": \"{{validUntil}}\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/wallets",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "wallets"
+          ]
+        }
+      }
+    },
+    {
+      "name": "3. Create session",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('201 created', () => pm.response.to.have.status(201));",
+              "pm.collectionVariables.set('sessionId', pm.response.json().session.sessionId);"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"walletId\": \"{{walletId}}\",\n  \"prompt\": \"Buy wireless ANC headphones from Sony or Bose under $75\",\n  \"connectorId\": \"paypal-demo-marketplace\",\n  \"channel\": \"WEB\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/sessions",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "sessions"
+          ]
+        }
+      }
+    },
+    {
+      "name": "4. Run session (compromised agent)",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 ok', () => pm.response.to.have.status(200));",
+              "const b = pm.response.json();",
+              "pm.test('agent outcome present', () => pm.expect(b).to.have.property('agent'));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"agentMode\": \"compromised\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/sessions/{{sessionId}}/run",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "sessions",
+            "{{sessionId}}",
+            "run"
+          ]
+        }
+      }
+    },
+    {
+      "name": "5. Get session",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "pm.test('200 ok', () => pm.response.to.have.status(200));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "GET",
+        "header": [],
+        "url": {
+          "raw": "{{baseUrl}}/api/sessions/{{sessionId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "sessions",
+            "{{sessionId}}"
+          ]
+        }
+      }
+    },
+    {
+      "name": "6. Evaluate refund",
+      "event": [
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "exec": [
+              "// Expected 400 SESSION_PAYMENT_NOT_FOUND until the session has a captured sandbox payment.",
+              "pm.test('responded', () => pm.expect([200, 400]).to.include(pm.response.code));"
+            ]
+          }
+        }
+      ],
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Content-Type",
+            "value": "application/json"
+          }
+        ],
+        "body": {
+          "mode": "raw",
+          "raw": "{\n  \"amount\": 10,\n  \"currency\": \"USD\",\n  \"reason\": \"CUSTOMER_REQUEST\"\n}",
+          "options": {
+            "raw": {
+              "language": "json"
+            }
+          }
+        },
+        "url": {
+          "raw": "{{baseUrl}}/api/trust-center/refunds/evaluate/{{sessionId}}",
+          "host": [
+            "{{baseUrl}}"
+          ],
+          "path": [
+            "api",
+            "trust-center",
+            "refunds",
+            "evaluate",
+            "{{sessionId}}"
+          ]
+        }
+      }
+    }
+  ]
+}

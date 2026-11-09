@@ -64,11 +64,17 @@ export async function handleCommerceRoutes(
       let connector=getCommerceConnectors(env).find(c=>c.info().id===connectorId);
       if(!connector) return json({error:"CONNECTOR_NOT_AVAILABLE"},400);
       const catalog=connectorId==='shopify-global-catalog';
+      const channel3=connectorId==='channel3-catalog';
+      const discovery=catalog||channel3;
       if(catalog){
         if(Object.keys(body).some(k=>!['walletId','connectorId','query','limit','operation','ids','id'].includes(k)))return json({error:'MCP_ARGUMENTS_INVALID'},400);
         if(typeof body.query!=='string'||body.query.length>400)return json({error:'MCP_ARGUMENTS_INVALID'},400);
         if(body.operation!==undefined&&!(CATALOG_TOOLS as readonly string[]).includes(body.operation))return json({error:'MCP_TOOL_NOT_ALLOWED'},400);
         connector=new ShopifyGlobalCatalogConnector(env,undefined,wallet.countryCode,wallet.currency);
+      }
+
+      if(channel3){
+        if(Object.keys(body).some(k=>!['walletId','connectorId','query','limit'].includes(k))||typeof body.query!=='string'||body.query.length>400)return json({error:'CHANNEL3_ARGUMENTS_INVALID'},400);
       }
 
       // Search is based only on user product intent. Wallet rules are never sent
@@ -85,7 +91,7 @@ export async function handleCommerceRoutes(
       const candidates=[] as any[];
       for(const rawProduct of products){
         try{
-          const normalized=await authorizeProductContext(env,wallet,rawProduct,catalog?connectorId:undefined);
+          const normalized=await authorizeProductContext(env,wallet,rawProduct,discovery?connectorId:undefined);
           let evaluation=evaluateWalletTransaction(wallet,normalized.transaction);
           let risk;
           if(catalog){
@@ -97,8 +103,15 @@ export async function handleCommerceRoutes(
             const observation={...normalized.transaction,catalogObservation:rawProduct.discovery};
             await recordDecision(env.DATABASE_URL,walletId,observation,evaluation);
           }
+          if(channel3){
+            // Real listing, unverified payee: policy is evaluated on the real facts but can never auto-execute.
+            const tightened=await assessAndTighten(env.DATABASE_URL,{sessionId:'catalog_'+crypto.randomUUID(),walletId:wallet.walletId,agentId:'intentlock-catalog-discovery',merchant:rawProduct.merchant,
+              amount:normalized.transaction.amount,currency:normalized.transaction.currency,policyDecision:evaluation.decision,
+              selectedMerchantMessage:[rawProduct.title,rawProduct.merchantMessage,...rawProduct.features].join('\n').slice(0,16000)},evaluation);
+            evaluation={...tightened.evaluation,canAutoExecute:false};risk=tightened.assessment;
+          }
           candidates.push({
-            ...(catalog?{discoveryOnly:true,executionAllowed:false,risk}:{}),
+            ...(discovery?{discoveryOnly:true,executionAllowed:false,risk}:{}),
             product:normalized.product,
             walletAmount:normalized.transaction.amount,
             walletCurrency:normalized.transaction.currency,
@@ -132,7 +145,7 @@ export async function handleCommerceRoutes(
       }
 
       return json({
-        ...(catalog?{discoveryOnly:true,executionAllowed:false}:{}),
+        ...(discovery?{discoveryOnly:true,executionAllowed:false}:{}),
         connector:connector.info(),
         wallet:{
           walletId:wallet.walletId,name:wallet.name,countryCode:wallet.countryCode,

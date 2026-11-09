@@ -1,0 +1,4349 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "IntentLock API",
+    "version": "1.0.0",
+    "summary": "AI-commerce authorization firewall: wallets, sessions, payments and proof.",
+    "description": "IntentLock sits between an AI shopping agent and the money. A user grants a bounded Intent Wallet; every agent-proposed purchase is evaluated by deterministic policy (ALLOW, STEP_UP or BLOCK) before any checkout. This contract covers the sandbox demo and API-client surface only.\n\nSAFETY: the hosted demo is PayPal Sandbox only. Money moves only through PayPal checkout approved by the buyer plus a verified PayPal webhook; no endpoint here moves funds directly.\n\nAUTH: call POST /api/access/demo for a 30-minute bearer token, or use an API client key. Demo POST mutations require a unique x-intentlock-request-id header (16-128 chars of [-a-zA-Z0-9_]) to prevent replay.\n\nOperator-only routes (x-intentlock-ops-token) are out of scope and not documented.",
+    "license": {
+      "name": "See repository LICENSE",
+      "identifier": "NOASSERTION"
+    }
+  },
+  "servers": [
+    {
+      "url": "https://intentlock-worker-demo.shdixit10.workers.dev",
+      "description": "Sandbox demo (PayPal Sandbox)"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Access",
+      "description": "Demo capability tokens"
+    },
+    {
+      "name": "Wallets",
+      "description": "Intent Wallets and policy evaluation"
+    },
+    {
+      "name": "Sessions",
+      "description": "Agent purchase sessions"
+    },
+    {
+      "name": "Payments",
+      "description": "PayPal checkout, authorize, capture and proof"
+    },
+    {
+      "name": "Commerce",
+      "description": "Connector discovery and search"
+    },
+    {
+      "name": "Post-purchase",
+      "description": "Refund policy and post-purchase reads"
+    },
+    {
+      "name": "Authorize",
+      "description": "API-client authorization API (/v1)"
+    },
+    {
+      "name": "System",
+      "description": "Health and provider status"
+    }
+  ],
+  "paths": {
+    "/health": {
+      "get": {
+        "operationId": "getHealth",
+        "summary": "Service health and configuration flags",
+        "tags": [
+          "System"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                },
+                "example": {
+                  "service": "intentlock-worker",
+                  "status": "ok",
+                  "version": "V11.5.1",
+                  "release": "V11.5.1",
+                  "gitCommit": null,
+                  "deploymentEnvironment": null,
+                  "databaseConfigured": true,
+                  "redisConfigured": false,
+                  "razorpayConfigured": false,
+                  "webhookConfigured": false,
+                  "razorpayWebhookConfigured": false,
+                  "paypalWebhookConfigured": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/payments/provider": {
+      "get": {
+        "operationId": "getPaymentProvider",
+        "summary": "Payment provider mode and PayPal readiness",
+        "tags": [
+          "System",
+          "Payments"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentProvider"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/payments/capabilities": {
+      "get": {
+        "operationId": "getPaymentCapabilities",
+        "summary": "Evaluate provider capability for a hypothetical payment",
+        "tags": [
+          "System",
+          "Payments"
+        ],
+        "security": [],
+        "parameters": [
+          {
+            "name": "amount",
+            "in": "query",
+            "schema": {
+              "type": "number",
+              "default": 1
+            }
+          },
+          {
+            "name": "currency",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "default": "USD"
+            }
+          },
+          {
+            "name": "walletCurrency",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "default": "INR"
+            }
+          },
+          {
+            "name": "buyerCountry",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "default": "IN"
+            }
+          },
+          {
+            "name": "merchantCountry",
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "default": "ZZ"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaymentCapabilities"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/access/demo": {
+      "post": {
+        "operationId": "issueDemoToken",
+        "summary": "Issue a sandbox demo capability token",
+        "description": "Sandbox only (requires demo access enabled and PayPal sandbox). No request body or credentials. Token expires after 30 minutes. Rate limited per IP and globally (429 DEMO_ISSUANCE_LIMIT). Returns 503 SANDBOX_ACCESS_DISABLED when demo access is off.",
+        "tags": [
+          "Access"
+        ],
+        "security": [],
+        "responses": {
+          "201": {
+            "description": "Token issued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DemoCapability"
+                },
+                "example": {
+                  "token": "ildemo_<64-hex-chars>",
+                  "expiresAt": "2030-01-01T12:30:00.000Z",
+                  "scopes": [
+                    "financial:read",
+                    "wallet:create",
+                    "wallet:evaluate",
+                    "wallet:revoke",
+                    "session:create",
+                    "session:run",
+                    "stepup:resolve",
+                    "payment:execute",
+                    "commerce:search",
+                    "intent:create",
+                    "legacy:evaluate",
+                    "refund:evaluate"
+                  ]
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/access/refresh": {
+      "post": {
+        "operationId": "refreshDemoToken",
+        "summary": "Rotate a demo capability for a fresh 30-minute token",
+        "description": "Demo capability required (403 DEMO_CAPABILITY_REQUIRED otherwise). The old token stops working; reuse returns 401 CAPABILITY_ALREADY_ROTATED.",
+        "tags": [
+          "Access"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Rotated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DemoCapability"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/access/logout": {
+      "post": {
+        "operationId": "logoutDemo",
+        "summary": "Revoke the current demo capability",
+        "tags": [
+          "Access"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "const": true
+                    }
+                  },
+                  "required": [
+                    "ok"
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/wallets": {
+      "get": {
+        "operationId": "listWallets",
+        "summary": "List wallets visible to the caller (max 50)",
+        "tags": [
+          "Wallets"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalletListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createWallet",
+        "summary": "Create an Intent Wallet",
+        "description": "Demo callers: currency must be USD, totalAuthority and maxSingleTransaction <= 100, validUntil within 24 hours (else 403 DEMO_AUTHORITY_LIMIT); per-principal and per-IP hourly limits (429 DEMO_WALLET_LIMIT). Requires x-intentlock-request-id for demo callers.",
+        "tags": [
+          "Wallets"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RequestId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WalletCreateRequest"
+              },
+              "example": {
+                "name": "Controlled electronics",
+                "currency": "USD",
+                "countryCode": "US",
+                "totalAuthority": 100,
+                "autoBuyLimit": 55,
+                "maxSingleTransaction": 75,
+                "allowedCategories": [
+                  "electronics"
+                ],
+                "allowedBrands": [
+                  "Sony",
+                  "Bose"
+                ],
+                "blockedBrands": [
+                  "Boat"
+                ],
+                "requiredFeatures": [
+                  "wireless",
+                  "ANC"
+                ],
+                "validUntil": "2030-01-01T12:00:00.000Z"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalletCreateResponse"
+                },
+                "example": {
+                  "ok": true,
+                  "wallet": {
+                    "walletId": "iw_00000000-0000-0000-0000-000000000000",
+                    "name": "Controlled electronics",
+                    "currency": "USD",
+                    "countryCode": "US",
+                    "totalAuthority": 100,
+                    "spentAmount": 0,
+                    "reservedAmount": 0,
+                    "autoBuyLimit": 55,
+                    "maxSingleTransaction": 75,
+                    "allowedCategories": [
+                      "electronics"
+                    ],
+                    "allowedBrands": [
+                      "Sony",
+                      "Bose"
+                    ],
+                    "blockedBrands": [
+                      "Boat"
+                    ],
+                    "requiredFeatures": [
+                      "wireless",
+                      "ANC"
+                    ],
+                    "excludedConditions": [],
+                    "validUntil": "2030-01-01T12:00:00.000Z",
+                    "status": "ACTIVE"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failure. error is WALLET_REQUEST_FAILED (with message from schema validation), INVALID_WALLET_LIMITS, INVALID_CURRENCY_CODE, INVALID_COUNTRY_CODE, INVALID_AUTHORITY_HIERARCHY, INVALID_EXPIRY, REQUEST_ID_REQUIRED or INVALID_JSON.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "WALLET_REQUEST_FAILED",
+                  "message": "validation failed"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/Replayed"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/wallets/{walletId}/evaluate": {
+      "post": {
+        "operationId": "evaluateWalletTransaction",
+        "summary": "Evaluate a hypothetical transaction against a wallet",
+        "description": "Records a decision and, for STEP_UP, issues a step-up request. Does not move money.",
+        "tags": [
+          "Wallets"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WalletId"
+          },
+          {
+            "$ref": "#/components/parameters/RequestId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WalletEvaluateRequest"
+              },
+              "example": {
+                "productName": "Sony WH-CH720N",
+                "category": "electronics",
+                "brand": "Sony",
+                "amount": 49,
+                "currency": "USD",
+                "quantity": 1,
+                "features": [
+                  "wireless",
+                  "ANC"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Decision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalletEvaluateResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "RESOURCE_NOT_FOUND (gate) or WALLET_NOT_FOUND.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "RESOURCE_NOT_FOUND"
+                }
+              }
+            }
+          },
+          "409": {
+            "$ref": "#/components/responses/Replayed"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/wallets/{walletId}/revoke": {
+      "post": {
+        "operationId": "revokeWallet",
+        "summary": "Revoke a wallet (kill switch)",
+        "description": "Idempotent: alreadyRevoked is true if it was revoked earlier. The body is optional.",
+        "tags": [
+          "Wallets"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/WalletId"
+          },
+          {
+            "$ref": "#/components/parameters/RequestId"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WalletRevokeRequest"
+              },
+              "example": {
+                "reason": "Demo cleanup"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WalletRevokeResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "RESOURCE_NOT_FOUND or WALLET_NOT_FOUND.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "RESOURCE_NOT_FOUND"
+                }
+              }
+            }
+          },
+          "409": {
+            "$ref": "#/components/responses/Replayed"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/sessions": {
+      "get": {
+        "operationId": "listSessions",
+        "summary": "List sessions visible to the caller",
+        "tags": [
+          "Sessions"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionListResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      },
+      "post": {
+        "operationId": "createSession",
+        "summary": "Create a purchase session for a wallet",
+        "description": "Demo callers: connectorId must be paypal-demo-marketplace and channel WEB. Discovery-only connectors (shopify-global-catalog, channel3-catalog) cannot create sessions.",
+        "tags": [
+          "Sessions"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RequestId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSessionRequest"
+              },
+              "example": {
+                "walletId": "iw_00000000-0000-0000-0000-000000000000",
+                "prompt": "Buy wireless ANC headphones from Sony or Bose under $75",
+                "connectorId": "paypal-demo-marketplace",
+                "channel": "WEB"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionWithEvents"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "WALLET_ID_REQUIRED, PROMPT_REQUIRED, INVALID_CHANNEL, CONNECTOR_NOT_AVAILABLE (with connectorId), REQUEST_ID_REQUIRED, SESSION_REQUEST_FAILED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "PROMPT_REQUIRED"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "description": "Forbidden, including COMMERCE_DISCOVERY_ONLY.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "DEMO_CONNECTOR_ONLY"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "RESOURCE_NOT_FOUND or WALLET_NOT_FOUND.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "WALLET_NOT_FOUND"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "REQUEST_REPLAYED, or WALLET_NOT_READY (revoked, expired, no authority, or less than 15 minutes of validity left) with code, message and readiness.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "WALLET_NOT_READY",
+                  "code": "WALLET_EXPIRES_TOO_SOON_FOR_PAYMENT",
+                  "message": "This Intent Wallet has less than 15 minutes remaining, so a new payment cannot be safely started."
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/sessions/{sessionId}": {
+      "get": {
+        "operationId": "getSession",
+        "summary": "Get a session and its event log",
+        "tags": [
+          "Sessions"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SessionId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionWithEvents"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/sessions/{sessionId}/run": {
+      "post": {
+        "operationId": "runSession",
+        "summary": "Run the shopping agent and evaluate every candidate against wallet policy",
+        "description": "Only runs on sessions in CREATED status. Send agentMode \"compromised\" to simulate a prompt-injected agent; the firewall then overrules it (see agent.overruled). The body is optional (defaults to live). Failures (for example session not runnable) return 400 SESSION_REQUEST_FAILED with a code from the closed vocabulary (often PAYMENT_OPERATION_FAILED).",
+        "tags": [
+          "Sessions"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SessionId"
+          },
+          {
+            "$ref": "#/components/parameters/RequestId"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunSessionRequest"
+              },
+              "example": {
+                "agentMode": "compromised"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Evaluation outcome",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunSessionResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "INVALID_AGENT_MODE, REQUEST_ID_REQUIRED, or SESSION_REQUEST_FAILED with code and message.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "SESSION_REQUEST_FAILED",
+                  "code": "PAYMENT_OPERATION_FAILED",
+                  "message": "PAYMENT_OPERATION_FAILED"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Replayed"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/sessions/{sessionId}/payment": {
+      "post": {
+        "operationId": "createSessionPayment",
+        "summary": "Create the PayPal checkout order for an approved session",
+        "description": "Idempotent. Money never moves here: the buyer must approve the order at PayPal checkout.",
+        "tags": [
+          "Payments"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SessionId"
+          },
+          {
+            "$ref": "#/components/parameters/RequestId"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {}
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Order created or already existing",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreatePaymentResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "SESSION_PAYMENT_FAILED with a PaymentErrorCode, or REQUEST_REPLAYED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "SESSION_PAYMENT_FAILED",
+                  "code": "SESSION_NOT_READY_TO_PAY",
+                  "message": "SESSION_NOT_READY_TO_PAY"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      },
+      "get": {
+        "operationId": "getSessionPayment",
+        "summary": "Get the payment record and wallet reservation for a session",
+        "tags": [
+          "Payments"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SessionId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GetPaymentResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/sessions/{sessionId}/payment/authorize": {
+      "post": {
+        "operationId": "authorizeSessionPayment",
+        "summary": "Authorize the buyer-approved PayPal order",
+        "description": "Requires the buyer to have approved the order at PayPal checkout.",
+        "tags": [
+          "Payments"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SessionId"
+          },
+          {
+            "$ref": "#/components/parameters/RequestId"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {}
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Authorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthorizePaymentResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "PAYPAL_AUTHORIZE_FAILED with a PaymentErrorCode, or REQUEST_REPLAYED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "PAYPAL_AUTHORIZE_FAILED",
+                  "code": "SESSION_NOT_AWAITING_PAYPAL_APPROVAL",
+                  "message": "SESSION_NOT_AWAITING_PAYPAL_APPROVAL"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/sessions/{sessionId}/payment/capture": {
+      "post": {
+        "operationId": "captureSessionPayment",
+        "summary": "Capture an authorized PayPal payment",
+        "description": "Final settlement is confirmed by the verified PayPal webhook.",
+        "tags": [
+          "Payments"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SessionId"
+          },
+          {
+            "$ref": "#/components/parameters/RequestId"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object"
+              },
+              "example": {}
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Captured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapturePaymentResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "description": "PAYPAL_CAPTURE_FAILED with a PaymentErrorCode, or REQUEST_REPLAYED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "PAYPAL_CAPTURE_FAILED",
+                  "code": "SESSION_NOT_AUTHORIZED_FOR_CAPTURE",
+                  "message": "SESSION_NOT_AUTHORIZED_FOR_CAPTURE"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/sessions/{sessionId}/proof": {
+      "get": {
+        "operationId": "getSessionProof",
+        "summary": "Get the signed, independently verified proof receipt",
+        "tags": [
+          "Payments"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SessionId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Proof",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProofResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "RESOURCE_NOT_FOUND (gate), SESSION_NOT_FOUND, or PROOF_NOT_READY (with sessionStatus).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProofNotReady"
+                    }
+                  ]
+                },
+                "example": {
+                  "error": "PROOF_NOT_READY",
+                  "sessionStatus": "CREATED"
+                }
+              }
+            }
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/commerce/connectors": {
+      "get": {
+        "operationId": "listCommerceConnectors",
+        "summary": "List commerce connectors and whether each is enabled",
+        "tags": [
+          "Commerce"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConnectorListResponse"
+                },
+                "example": {
+                  "connectors": [
+                    {
+                      "id": "paypal-demo-marketplace",
+                      "name": "PayPal Demo Marketplace",
+                      "kind": "PAYPAL_DEMO",
+                      "enabled": true,
+                      "description": "Sandbox sellers"
+                    },
+                    {
+                      "id": "channel3-catalog",
+                      "name": "Channel3 Product Catalog",
+                      "kind": "CHANNEL3",
+                      "enabled": false,
+                      "description": "Real product discovery only. Disabled until CHANNEL3_ENABLED and the CHANNEL3_API_KEY secret are set; no checkout."
+                    }
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/commerce/search": {
+      "post": {
+        "operationId": "searchCommerce",
+        "summary": "Search a connector and evaluate each candidate against a wallet",
+        "description": "Discovery and policy are separated: wallet rules are never sent to the marketplace. Discovery-only connectors (shopify-global-catalog, channel3-catalog) return discoveryOnly:true and executionAllowed:false; their candidates can never auto-execute and cannot be turned into sessions or payments. For demo callers, channel3-catalog is accepted only when enabled server-side and is rate limited (429 CHANNEL3_RATE_LIMITED); otherwise 403 DEMO_CONNECTOR_ONLY. channel3-catalog accepts only walletId, connectorId, query (<=400 chars) and limit, else 400 CHANNEL3_ARGUMENTS_INVALID.",
+        "tags": [
+          "Commerce"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/RequestId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CommerceSearchRequest"
+              },
+              "example": {
+                "walletId": "iw_00000000-0000-0000-0000-000000000000",
+                "query": "wireless noise cancelling headphones",
+                "connectorId": "channel3-catalog",
+                "limit": 5
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Candidates with policy decisions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CommerceSearchResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "WALLET_ID_REQUIRED, SEARCH_QUERY_REQUIRED, CONNECTOR_NOT_AVAILABLE, CHANNEL3_ARGUMENTS_INVALID, MCP_ARGUMENTS_INVALID, MCP_TOOL_NOT_ALLOWED, COMMERCE_SEARCH_FAILED (with message), REQUEST_ID_REQUIRED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "CHANNEL3_ARGUMENTS_INVALID"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "RESOURCE_NOT_FOUND or WALLET_NOT_FOUND.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "WALLET_NOT_FOUND"
+                }
+              }
+            }
+          },
+          "409": {
+            "$ref": "#/components/responses/Replayed"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/trust-center/refunds/evaluate/{sessionId}": {
+      "post": {
+        "operationId": "evaluateRefund",
+        "summary": "Evaluate a refund against policy (no provider call)",
+        "description": "Read-only policy check; reports ALLOW or BLOCK with violations. Requesting or syncing a refund is operator-only and is not part of this contract.",
+        "tags": [
+          "Post-purchase"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SessionId"
+          },
+          {
+            "$ref": "#/components/parameters/RequestId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RefundEvaluateRequest"
+              },
+              "example": {
+                "amount": 20,
+                "currency": "USD",
+                "reason": "CUSTOMER_REQUEST"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Policy result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RefundEvaluateResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "TRUST_CENTER_OPERATION_FAILED with message (for example SESSION_PAYMENT_NOT_FOUND, INVALID_REFUND_REASON), or REQUEST_ID_REQUIRED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "TRUST_CENTER_OPERATION_FAILED",
+                  "message": "SESSION_PAYMENT_NOT_FOUND"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Replayed"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/trust-center/post-purchase/{sessionId}": {
+      "get": {
+        "operationId": "getPostPurchaseState",
+        "summary": "Read post-purchase state (payment, refunds, disputes)",
+        "tags": [
+          "Post-purchase"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/SessionId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PostPurchaseState"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "TRUST_CENTER_OPERATION_FAILED with message.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "TRUST_CENTER_OPERATION_FAILED",
+                  "message": "SESSION_NOT_FOUND"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/v1/status": {
+      "get": {
+        "operationId": "getAuthorizeStatus",
+        "summary": "Authorization API status",
+        "tags": [
+          "Authorize"
+        ],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthorizeStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/authorize": {
+      "post": {
+        "operationId": "authorizeTransaction",
+        "summary": "Authorize an agent transaction (API clients)",
+        "description": "Requires an API client key with the authorize scope, sent as a Bearer token. Idempotent per idempotencyKey. An ALLOW decision returns a signed token.",
+        "tags": [
+          "Authorize"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AuthorizeRequest"
+              },
+              "example": {
+                "idempotencyKey": "order-0001-attempt-1",
+                "agentId": "agent-123",
+                "walletId": "iw_00000000-0000-0000-0000-000000000000",
+                "merchant": "Example Merchant",
+                "transaction": {
+                  "category": "electronics",
+                  "brand": "Sony",
+                  "amount": 49,
+                  "currency": "USD",
+                  "quantity": 1,
+                  "features": [
+                    "wireless"
+                  ]
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Decision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AuthorizeResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "INVALID_JSON, or AUTHORIZATION_FAILED with message MISSING_* / INVALID_*.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "AUTHORIZATION_FAILED",
+                  "message": "INVALID_TRANSACTION"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "MISSING_API_KEY or INVALID_API_KEY.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "MISSING_API_KEY"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "INSUFFICIENT_SCOPE (includes required).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "INSUFFICIENT_SCOPE",
+                  "required": "authorize"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "AUTHORIZATION_FAILED with message WALLET_NOT_FOUND.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "AUTHORIZATION_FAILED",
+                  "message": "WALLET_NOT_FOUND"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "AUTHORIZATION_FAILED with message QUOTE_HASH_MISMATCH.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "AUTHORIZATION_FAILED",
+                  "message": "QUOTE_HASH_MISMATCH"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "DATABASE_NOT_CONFIGURED or AUTHORIZATION_FAILED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "AUTHORIZATION_FAILED",
+                  "message": "AUTH_SIGNING_SECRET_NOT_CONFIGURED"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/verify": {
+      "post": {
+        "operationId": "verifyAuthorization",
+        "summary": "Verify an authorization token",
+        "description": "Requires an API client key with the verify scope.",
+        "tags": [
+          "Authorize"
+        ],
+        "security": [
+          {
+            "bearerAuth": []
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/VerifyRequest"
+              },
+              "example": {
+                "token": "<intentlock-auth-token>"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Valid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VerifyResponse"
+                },
+                "example": {
+                  "valid": true
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "INVALID_JSON or MISSING_TOKEN.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "MISSING_TOKEN"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "valid:false with a reason, or MISSING_API_KEY / INVALID_API_KEY.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "oneOf": [
+                    {
+                      "$ref": "#/components/schemas/VerifyResponse"
+                    },
+                    {
+                      "$ref": "#/components/schemas/Error"
+                    }
+                  ]
+                },
+                "example": {
+                  "valid": false,
+                  "reason": "INVALID_SIGNATURE"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "INSUFFICIENT_SCOPE.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "INSUFFICIENT_SCOPE",
+                  "required": "verify"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "VERIFY_FAILED.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                },
+                "example": {
+                  "error": "VERIFY_FAILED"
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "Demo capability token (ildemo_...) from POST /api/access/demo, or an API client key. The x-intentlock-key header is accepted as an alternative to Authorization on /api routes."
+      },
+      "opsToken": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-intentlock-ops-token",
+        "description": "Operator token. Operator-only routes are out of scope for this contract; the scheme is declared for completeness."
+      }
+    },
+    "parameters": {
+      "RequestId": {
+        "name": "x-intentlock-request-id",
+        "in": "header",
+        "required": false,
+        "description": "Required (400 REQUEST_ID_REQUIRED if missing or malformed) on every demo-capability POST mutation except /api/access/*. Must be unique per request (409 REQUEST_REPLAYED on reuse). Use a UUID.",
+        "schema": {
+          "type": "string",
+          "pattern": "^[-a-zA-Z0-9_]{16,128}$"
+        },
+        "example": "00000000-0000-4000-8000-000000000000"
+      },
+      "WalletId": {
+        "name": "walletId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        },
+        "example": "iw_00000000-0000-0000-0000-000000000000"
+      },
+      "SessionId": {
+        "name": "sessionId",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        },
+        "example": "sess_00000000-0000-0000-0000-000000000000"
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "Invalid input. Body is {error} (for example REQUEST_ID_REQUIRED, RESOURCE_ID_REQUIRED, INVALID_JSON, WALLET_ID_REQUIRED) or a route-specific envelope.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "error": "REQUEST_ID_REQUIRED"
+            }
+          }
+        }
+      },
+      "Unauthorized": {
+        "description": "Missing, invalid or expired credentials: AUTHENTICATION_REQUIRED, UNAUTHORIZED, INVALID_CAPABILITY, INVALID_OR_EXPIRED_CAPABILITY, INVALID_API_KEY, CAPABILITY_ALREADY_ROTATED.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "error": "INVALID_OR_EXPIRED_CAPABILITY"
+            }
+          }
+        }
+      },
+      "Forbidden": {
+        "description": "Authenticated but not allowed: INSUFFICIENT_SCOPE, DEMO_CONNECTOR_ONLY, DEMO_CHANNEL_ONLY, DEMO_AUTHORITY_LIMIT, OPERATOR_REQUIRED, SANDBOX_ACCESS_DISABLED, DEMO_CAPABILITY_REQUIRED.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "error": "DEMO_CONNECTOR_ONLY"
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "RESOURCE_NOT_FOUND: the resource does not exist OR the caller has no permission on it. Existence is deliberately not revealed.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "error": "RESOURCE_NOT_FOUND"
+            }
+          }
+        }
+      },
+      "Replayed": {
+        "description": "REQUEST_REPLAYED: the x-intentlock-request-id nonce was already used by this principal. Send a fresh value.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "error": "REQUEST_REPLAYED"
+            }
+          }
+        }
+      },
+      "RateLimited": {
+        "description": "RATE_LIMITED, DEMO_ISSUANCE_LIMIT, DEMO_WALLET_LIMIT, DEMO_MUTATION_LIMIT, DEMO_AI_LIMIT, CHANNEL3_RATE_LIMITED or SHOPIFY_CATALOG_RATE_LIMITED.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "error": "RATE_LIMITED"
+            }
+          }
+        }
+      },
+      "Unavailable": {
+        "description": "ACCESS_CONTROL_UNAVAILABLE (database not configured or gate failure) or SANDBOX_ACCESS_DISABLED.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            },
+            "example": {
+              "error": "ACCESS_CONTROL_UNAVAILABLE"
+            }
+          }
+        }
+      },
+      "PaymentFailure": {
+        "description": "Payment precondition or provider failure. error is the operation (SESSION_PAYMENT_FAILED, PAYPAL_AUTHORIZE_FAILED, PAYPAL_CAPTURE_FAILED); code is a PaymentErrorCode.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Error"
+                },
+                {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "$ref": "#/components/schemas/PaymentErrorCode"
+                    }
+                  },
+                  "required": [
+                    "code"
+                  ]
+                }
+              ]
+            },
+            "example": {
+              "error": "SESSION_PAYMENT_FAILED",
+              "code": "SESSION_NOT_READY_TO_PAY",
+              "message": "SESSION_NOT_READY_TO_PAY"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "Machine-readable error code. Access-gate errors (401/403/404/409/413/429/503) carry only this field."
+          },
+          "code": {
+            "type": "string",
+            "description": "Closed-vocabulary diagnostic code (see PaymentErrorCode) on session/payment failures."
+          },
+          "message": {
+            "type": "string",
+            "description": "Human-readable detail. For payment failures this equals code."
+          },
+          "providerStatus": {
+            "type": "integer",
+            "description": "HTTP status returned by PayPal when code is PAYPAL_REQUEST_REJECTED or PAYPAL_OAUTH_REJECTED."
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "description": "Common error envelope. Some routes add extra fields (for example readiness, sessionStatus, connectorId, required)."
+      },
+      "AccessErrorCode": {
+        "type": "string",
+        "enum": [
+          "AUTHENTICATION_REQUIRED",
+          "UNAUTHORIZED",
+          "INVALID_CAPABILITY",
+          "INVALID_OR_EXPIRED_CAPABILITY",
+          "INVALID_API_KEY",
+          "CAPABILITY_ALREADY_ROTATED",
+          "SANDBOX_ACCESS_DISABLED",
+          "INSUFFICIENT_SCOPE",
+          "DEMO_CAPABILITY_REQUIRED",
+          "DEMO_CONNECTOR_ONLY",
+          "DEMO_CHANNEL_ONLY",
+          "DEMO_AUTHORITY_LIMIT",
+          "OPERATOR_REQUIRED",
+          "REQUEST_ID_REQUIRED",
+          "RESOURCE_ID_REQUIRED",
+          "INVALID_JSON",
+          "RESOURCE_NOT_FOUND",
+          "NOT_FOUND",
+          "REQUEST_REPLAYED",
+          "REQUEST_TOO_LARGE",
+          "RATE_LIMITED",
+          "DEMO_ISSUANCE_LIMIT",
+          "DEMO_WALLET_LIMIT",
+          "DEMO_MUTATION_LIMIT",
+          "DEMO_AI_LIMIT",
+          "CHANNEL3_RATE_LIMITED",
+          "SHOPIFY_CATALOG_RATE_LIMITED",
+          "ACCESS_CONTROL_UNAVAILABLE"
+        ],
+        "description": "Values of Error.error produced by the access gate."
+      },
+      "PaymentErrorCode": {
+        "type": "string",
+        "enum": [
+          "PAYPAL_NOT_CONFIGURED",
+          "PAYPAL_ENVIRONMENT_INVALID",
+          "PAYPAL_RETURN_BASE_URL_NOT_CONFIGURED",
+          "PAYPAL_RETURN_BASE_URL_INVALID",
+          "PAYPAL_WEBHOOK_ID_NOT_CONFIGURED",
+          "PAYPAL_OAUTH_INVALID_TOKEN",
+          "MERCHANT_MAPPING_EXPIRED",
+          "MERCHANT_REGISTRY_INVALID",
+          "MERCHANT_REGISTRY_AMBIGUOUS",
+          "VERIFIED_RECIPIENT_MAPPING_REQUIRED",
+          "RECIPIENT_MAPPING_CHANGED_REAUTHORIZE",
+          "PAYPAL_CREDENTIAL_MERCHANT_MISMATCH",
+          "PAYMENT_RECIPIENT_BINDING_MISMATCH",
+          "DATABASE_NOT_CONFIGURED",
+          "APPROVAL_SIGNING_SECRET_NOT_CONFIGURED",
+          "SESSION_NOT_FOUND",
+          "SESSION_PAYMENT_NOT_FOUND",
+          "SESSION_NOT_AUTHORIZED_FOR_CAPTURE",
+          "SESSION_NOT_AWAITING_PAYPAL_APPROVAL",
+          "PAYPAL_AUTHORIZATION_ID_MISSING",
+          "PAYPAL_ORDER_ID_MISSING",
+          "PAYMENT_PROVIDER_NOT_PAYPAL",
+          "RESERVATION_REQUIRED",
+          "OAUTH_TRANSPORT_FAILURE",
+          "PAYPAL_TRANSPORT_FAILURE",
+          "UPSTASH_REDIS_PARTIALLY_CONFIGURED",
+          "SESSION_PAYMENT_ALREADY_IN_PROGRESS",
+          "SELECTED_PRODUCT_NOT_FOUND",
+          "WALLET_NOT_FOUND",
+          "COMMERCE_CONNECTOR_NOT_AVAILABLE_AT_PAYMENT",
+          "COMMERCE_PRODUCT_NO_LONGER_AVAILABLE",
+          "COMMERCE_PRODUCT_OUT_OF_STOCK",
+          "COMMERCE_QUOTE_CHANGED_REAUTHORIZE",
+          "ONE_TIME_AUTHORIZATION_REQUIRED",
+          "WALLET_EXPIRES_TOO_SOON_FOR_PAYMENT",
+          "STEP_UP_REQUEST_NOT_APPROVED",
+          "COMMERCE_DISCOVERY_ONLY",
+          "DEMO_CHECKOUT_SANDBOX_ONLY",
+          "PAYPAL_PARTNER_INTEGRATION_NOT_IMPLEMENTED",
+          "RESERVATION_NOT_EXECUTABLE",
+          "RESERVATION_OPERATION_INVALID",
+          "RESERVATION_APPROVAL_REQUIRED",
+          "RESERVATION_AMOUNT_INVALID",
+          "RESERVATION_IDENTITY_MISMATCH",
+          "RESERVATION_TERMINAL",
+          "RESERVATION_SESSION_NOT_READY",
+          "RESERVATION_SESSION_WALLET_MISMATCH",
+          "WALLET_AUTHORITY_INACTIVE",
+          "WALLET_AVAILABLE_AUTHORITY_EXCEEDED",
+          "LEGACY_PAYMENT_RECONCILIATION_REQUIRED",
+          "SESSION_NOT_READY_TO_PAY",
+          "AUTHORITY_CHANGED",
+          "PAYPAL_AUTH_AMOUNT_MISMATCH",
+          "PAYPAL_AUTH_CURRENCY_MISMATCH",
+          "PAYPAL_CAPTURE_AMOUNT_MISMATCH",
+          "PAYPAL_CAPTURE_CURRENCY_MISMATCH",
+          "PAYPAL_OAUTH_REJECTED",
+          "PAYPAL_REQUEST_REJECTED",
+          "PAYMENT_OPERATION_FAILED"
+        ],
+        "description": "Closed vocabulary returned in Error.code by session and payment failures. Unrecognised internal errors collapse to PAYMENT_OPERATION_FAILED; runtime detail after a colon is dropped."
+      },
+      "Decision": {
+        "type": "string",
+        "enum": [
+          "ALLOW",
+          "STEP_UP",
+          "BLOCK"
+        ],
+        "description": "Wallet policy decision."
+      },
+      "SessionStatus": {
+        "type": "string",
+        "enum": [
+          "CREATED",
+          "SEARCHING",
+          "READY_TO_PAY",
+          "AWAITING_STEP_UP",
+          "BLOCKED",
+          "REJECTED",
+          "PAYMENT_PENDING",
+          "PAYPAL_APPROVAL_PENDING",
+          "AUTHORIZED",
+          "CAPTURE_PENDING",
+          "CAPTURED",
+          "FAILED",
+          "CANCELLED"
+        ]
+      },
+      "DemoCapability": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string",
+            "description": "Demo capability bearer token (ildemo_ followed by 64 hex characters). Shown once; keep it out of logs.",
+            "pattern": "^ildemo_[a-f0-9]{64}$"
+          },
+          "expiresAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "scopes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "token",
+          "expiresAt",
+          "scopes"
+        ]
+      },
+      "Wallet": {
+        "type": "object",
+        "properties": {
+          "walletId": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "countryCode": {
+            "type": "string"
+          },
+          "totalAuthority": {
+            "type": "number"
+          },
+          "spentAmount": {
+            "type": "number"
+          },
+          "reservedAmount": {
+            "type": "number"
+          },
+          "autoBuyLimit": {
+            "type": "number",
+            "description": "Purchases up to this amount may auto-execute."
+          },
+          "maxSingleTransaction": {
+            "type": "number"
+          },
+          "allowedCategories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "allowedBrands": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "blockedBrands": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "requiredFeatures": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "excludedConditions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "validUntil": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "ACTIVE",
+              "REVOKED"
+            ]
+          }
+        },
+        "required": [
+          "walletId",
+          "name",
+          "currency",
+          "countryCode",
+          "totalAuthority",
+          "spentAmount",
+          "reservedAmount",
+          "autoBuyLimit",
+          "maxSingleTransaction",
+          "validUntil",
+          "status"
+        ]
+      },
+      "WalletCreateRequest": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "currency": {
+            "type": "string",
+            "description": "ISO 4217 code from the supported list. Defaults to INR when omitted; demo callers must send USD.",
+            "default": "INR"
+          },
+          "countryCode": {
+            "type": "string",
+            "description": "Two-letter uppercase country code.",
+            "pattern": "^[A-Z]{2}$",
+            "default": "IN"
+          },
+          "totalAuthority": {
+            "type": "number",
+            "description": "Must be > 0. Demo limit: <= 100.",
+            "exclusiveMinimum": 0
+          },
+          "autoBuyLimit": {
+            "type": "number",
+            "description": "Must be >= 0 and <= maxSingleTransaction.",
+            "minimum": 0
+          },
+          "maxSingleTransaction": {
+            "type": "number",
+            "description": "Must be > 0, <= totalAuthority. Demo limit: <= 100.",
+            "exclusiveMinimum": 0
+          },
+          "allowedCategories": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          },
+          "allowedBrands": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          },
+          "blockedBrands": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          },
+          "requiredFeatures": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "default": []
+          },
+          "validUntil": {
+            "type": "string",
+            "description": "Must be in the future. Demo limit: at most 24 hours from now.",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "name",
+          "totalAuthority",
+          "autoBuyLimit",
+          "maxSingleTransaction",
+          "validUntil"
+        ]
+      },
+      "WalletListResponse": {
+        "type": "object",
+        "properties": {
+          "wallets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Wallet"
+            }
+          },
+          "count": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "wallets",
+          "count"
+        ]
+      },
+      "WalletCreateResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": true
+          },
+          "wallet": {
+            "$ref": "#/components/schemas/Wallet"
+          }
+        },
+        "required": [
+          "ok",
+          "wallet"
+        ]
+      },
+      "WalletTransaction": {
+        "type": "object",
+        "properties": {
+          "productName": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "brand": {
+            "type": "string"
+          },
+          "amount": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "currency": {
+            "type": "string"
+          },
+          "quantity": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "features": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "category",
+          "brand",
+          "amount",
+          "currency",
+          "quantity",
+          "features"
+        ]
+      },
+      "WalletEvaluateRequest": {
+        "type": "object",
+        "properties": {
+          "productName": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "brand": {
+            "type": "string"
+          },
+          "amount": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "currency": {
+            "type": "string",
+            "description": "Defaults to the wallet currency."
+          },
+          "quantity": {
+            "type": "integer",
+            "minimum": 1,
+            "default": 1
+          },
+          "features": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "category",
+          "brand",
+          "amount"
+        ]
+      },
+      "WalletEvaluation": {
+        "type": "object",
+        "properties": {
+          "decision": {
+            "$ref": "#/components/schemas/Decision"
+          },
+          "violations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "remainingAuthority": {
+            "type": "number"
+          },
+          "requestedAmount": {
+            "type": "number"
+          },
+          "additionalAuthorityRequired": {
+            "type": "number"
+          },
+          "canAutoExecute": {
+            "type": "boolean"
+          },
+          "requiresHumanApproval": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "decision",
+          "violations",
+          "reasons",
+          "remainingAuthority",
+          "requestedAmount",
+          "additionalAuthorityRequired",
+          "canAutoExecute",
+          "requiresHumanApproval"
+        ]
+      },
+      "WalletEvaluateResponse": {
+        "type": "object",
+        "properties": {
+          "walletId": {
+            "type": "string"
+          },
+          "decisionId": {
+            "description": "Identifier of the recorded decision (type is driver-defined)."
+          },
+          "transaction": {
+            "$ref": "#/components/schemas/WalletTransaction"
+          },
+          "evaluation": {
+            "$ref": "#/components/schemas/WalletEvaluation"
+          },
+          "stepUp": {
+            "description": "Step-up request details when decision is STEP_UP, otherwise null.",
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": true
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "walletId",
+          "evaluation",
+          "transaction"
+        ]
+      },
+      "WalletRevokeRequest": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "description": "Optional; control characters are stripped and the value is truncated to 200 characters.",
+            "maxLength": 200
+          }
+        }
+      },
+      "WalletRevokeResponse": {
+        "type": "object",
+        "properties": {
+          "wallet": {
+            "$ref": "#/components/schemas/Wallet"
+          },
+          "alreadyRevoked": {
+            "type": "boolean"
+          },
+          "inFlight": {
+            "type": "object",
+            "properties": {
+              "reservations": {
+                "description": "Count of in-flight authority reservations."
+              }
+            }
+          }
+        },
+        "required": [
+          "wallet",
+          "alreadyRevoked",
+          "inFlight"
+        ]
+      },
+      "CommerceProduct": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "brand": {
+            "type": "string"
+          },
+          "category": {
+            "type": "string"
+          },
+          "merchant": {
+            "type": "string"
+          },
+          "merchantCountry": {
+            "type": "string"
+          },
+          "price": {
+            "type": "number"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "quantityAvailable": {
+            "type": "integer"
+          },
+          "features": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "productUrl": {
+            "type": "string"
+          },
+          "imageUrl": {
+            "type": "string"
+          },
+          "merchantMessage": {
+            "type": "string",
+            "description": "UNTRUSTED merchant-supplied text. Never treated as instructions."
+          }
+        },
+        "required": [
+          "id",
+          "title",
+          "brand",
+          "category",
+          "merchant",
+          "price",
+          "currency",
+          "quantityAvailable",
+          "features"
+        ],
+        "additionalProperties": true,
+        "description": "Normalised product. Additional internal fields (source, authorizationContext, discovery) may be present."
+      },
+      "Policy": {
+        "type": "object",
+        "properties": {
+          "decision": {
+            "$ref": "#/components/schemas/Decision"
+          },
+          "violations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "additionalAuthorityRequired": {
+            "type": "number"
+          },
+          "canAutoExecute": {
+            "type": "boolean"
+          },
+          "requiresHumanApproval": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "decision",
+          "violations",
+          "reasons"
+        ]
+      },
+      "SearchCandidate": {
+        "type": "object",
+        "properties": {
+          "discoveryOnly": {
+            "type": "boolean",
+            "const": true,
+            "description": "Present for discovery-only connectors (shopify-global-catalog, channel3-catalog)."
+          },
+          "executionAllowed": {
+            "type": "boolean",
+            "const": false
+          },
+          "risk": {
+            "description": "Risk assessment (discovery-only connectors).",
+            "type": "object",
+            "additionalProperties": true
+          },
+          "product": {
+            "$ref": "#/components/schemas/CommerceProduct"
+          },
+          "walletAmount": {
+            "oneOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "walletCurrency": {
+            "type": "string"
+          },
+          "fxQuote": {
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": true
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "policy": {
+            "$ref": "#/components/schemas/Policy"
+          },
+          "merchantTextTrust": {
+            "type": "string",
+            "const": "UNTRUSTED"
+          },
+          "merchantMessage": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "product",
+          "walletCurrency",
+          "policy",
+          "merchantTextTrust"
+        ]
+      },
+      "ConnectorInfo": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "DEMO",
+              "PAYPAL_DEMO",
+              "EBAY",
+              "HTTP_JSON",
+              "SHOPIFY",
+              "AMAZON_CREATORS",
+              "INDIAMART",
+              "CHANNEL3"
+            ]
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "description": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "kind",
+          "enabled",
+          "description"
+        ]
+      },
+      "ConnectorListResponse": {
+        "type": "object",
+        "properties": {
+          "connectors": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConnectorInfo"
+            }
+          }
+        },
+        "required": [
+          "connectors"
+        ]
+      },
+      "CommerceSearchRequest": {
+        "type": "object",
+        "properties": {
+          "walletId": {
+            "type": "string"
+          },
+          "query": {
+            "type": "string",
+            "description": "Product intent, at most 400 characters for discovery-only connectors.",
+            "maxLength": 400
+          },
+          "connectorId": {
+            "type": "string",
+            "description": "Defaults to demo-marketplace. Demo callers: paypal-demo-marketplace, or channel3-catalog when enabled server-side.",
+            "default": "demo-marketplace"
+          },
+          "limit": {
+            "type": "integer",
+            "description": "Defaults to 10."
+          },
+          "operation": {
+            "type": "string",
+            "description": "shopify-global-catalog only."
+          },
+          "ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "shopify-global-catalog only."
+          },
+          "id": {
+            "type": "string",
+            "description": "shopify-global-catalog only."
+          }
+        },
+        "required": [
+          "walletId",
+          "query"
+        ],
+        "description": "channel3-catalog accepts only walletId, connectorId, query and limit; any other key yields 400 CHANNEL3_ARGUMENTS_INVALID."
+      },
+      "CommerceSearchResponse": {
+        "type": "object",
+        "properties": {
+          "discoveryOnly": {
+            "type": "boolean",
+            "const": true
+          },
+          "executionAllowed": {
+            "type": "boolean",
+            "const": false
+          },
+          "connector": {
+            "$ref": "#/components/schemas/ConnectorInfo"
+          },
+          "wallet": {
+            "type": "object",
+            "properties": {
+              "walletId": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "countryCode": {
+                "type": "string"
+              },
+              "currency": {
+                "type": "string"
+              },
+              "autoBuyLimit": {
+                "type": "number"
+              },
+              "maxSingleTransaction": {
+                "type": "number"
+              }
+            }
+          },
+          "query": {
+            "type": "string"
+          },
+          "searchQuery": {
+            "type": "string",
+            "description": "Planned query actually sent to the connector. Wallet rules are never sent as filters."
+          },
+          "discoveryPolicySeparation": {
+            "type": "boolean",
+            "const": true
+          },
+          "count": {
+            "type": "integer"
+          },
+          "candidates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SearchCandidate"
+            }
+          }
+        },
+        "required": [
+          "connector",
+          "wallet",
+          "query",
+          "searchQuery",
+          "count",
+          "candidates"
+        ]
+      },
+      "CreateSessionRequest": {
+        "type": "object",
+        "properties": {
+          "walletId": {
+            "type": "string"
+          },
+          "prompt": {
+            "type": "string",
+            "description": "Natural-language purchase intent.",
+            "minLength": 1
+          },
+          "connectorId": {
+            "type": "string",
+            "description": "Defaults to demo-marketplace. Demo callers must use paypal-demo-marketplace. Discovery-only connectors are rejected with 403 COMMERCE_DISCOVERY_ONLY.",
+            "default": "demo-marketplace"
+          },
+          "channel": {
+            "type": "string",
+            "enum": [
+              "WEB",
+              "WHATSAPP",
+              "API"
+            ],
+            "default": "WEB",
+            "description": "Case-insensitive. Demo callers may only use WEB."
+          }
+        },
+        "required": [
+          "walletId",
+          "prompt"
+        ]
+      },
+      "Session": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "walletId": {
+            "type": "string"
+          },
+          "channel": {
+            "type": "string",
+            "enum": [
+              "WEB",
+              "WHATSAPP",
+              "API"
+            ]
+          },
+          "connectorId": {
+            "type": "string"
+          },
+          "userPrompt": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/SessionStatus"
+          },
+          "selectedProduct": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/CommerceProduct"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "selectedDecision": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Decision"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stepUpRequestId": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "authorizationId": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "quoteHash": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "paymentLinkUrl": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "paymentProvider": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "providerOrderId": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "providerAuthorizationId": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "providerCaptureId": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "capturedAmount": {
+            "oneOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "capturedCurrency": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "capturedAt": {
+            "oneOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "proofReceiptId": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "createdAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updatedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "completedAt": {
+            "oneOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "sessionId",
+          "walletId",
+          "channel",
+          "connectorId",
+          "userPrompt",
+          "status",
+          "selectedProduct",
+          "selectedDecision",
+          "createdAt",
+          "updatedAt"
+        ],
+        "additionalProperties": true,
+        "description": "Purchase session. Legacy Razorpay fields and idempotency internals may also be present."
+      },
+      "SessionEvent": {
+        "type": "object",
+        "properties": {
+          "eventSeq": {
+            "type": "integer"
+          },
+          "eventId": {
+            "type": "string"
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "eventType": {
+            "type": "string"
+          },
+          "payload": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "occurredAt": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "eventSeq",
+          "eventId",
+          "sessionId",
+          "eventType",
+          "payload",
+          "occurredAt"
+        ]
+      },
+      "SessionWithEvents": {
+        "type": "object",
+        "properties": {
+          "session": {
+            "$ref": "#/components/schemas/Session"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionEvent"
+            }
+          }
+        },
+        "required": [
+          "session",
+          "events"
+        ]
+      },
+      "SessionListResponse": {
+        "type": "object",
+        "properties": {
+          "sessions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Session"
+            }
+          }
+        },
+        "required": [
+          "sessions"
+        ]
+      },
+      "RunSessionRequest": {
+        "type": "object",
+        "properties": {
+          "agentMode": {
+            "type": "string",
+            "enum": [
+              "live",
+              "compromised"
+            ],
+            "default": "live",
+            "description": "live asks the sandbox AI agent for a recommendation; compromised simulates an agent that obeys merchant prompt-injection text. Either way the deterministic wallet policy decides."
+          }
+        }
+      },
+      "EvaluatedCandidate": {
+        "type": "object",
+        "properties": {
+          "product": {
+            "$ref": "#/components/schemas/CommerceProduct"
+          },
+          "decision": {
+            "$ref": "#/components/schemas/Decision"
+          },
+          "violations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "additionalAuthorityRequired": {
+            "type": "number"
+          },
+          "walletAmount": {
+            "type": "number"
+          },
+          "walletCurrency": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "product",
+          "decision",
+          "violations",
+          "reasons",
+          "additionalAuthorityRequired",
+          "walletAmount",
+          "walletCurrency"
+        ],
+        "additionalProperties": true
+      },
+      "AgentOutcome": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "live",
+              "compromised"
+            ]
+          },
+          "simulated": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "OK",
+              "UNAVAILABLE"
+            ]
+          },
+          "model": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rankedProductIds": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "recommendedProductId": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "proposedQuantity": {
+            "oneOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rationale": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "unavailableReason": {
+            "type": "string",
+            "description": "Present when status is UNAVAILABLE."
+          },
+          "overruled": {
+            "type": "boolean",
+            "description": "True when the firewall rejected or changed the agent proposal."
+          },
+          "overruleReasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "selectedProductId": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "mode",
+          "simulated",
+          "status",
+          "rankedProductIds",
+          "recommendedProductId",
+          "proposedQuantity",
+          "rationale",
+          "overruled",
+          "overruleReasons",
+          "selectedProductId"
+        ],
+        "description": "What the (untrusted) shopping agent proposed and whether IntentLock overruled it."
+      },
+      "RunSessionResponse": {
+        "type": "object",
+        "properties": {
+          "session": {
+            "$ref": "#/components/schemas/Session"
+          },
+          "events": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionEvent"
+            }
+          },
+          "candidates": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EvaluatedCandidate"
+            }
+          },
+          "agent": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/AgentOutcome"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "session",
+          "events",
+          "candidates",
+          "agent"
+        ]
+      },
+      "PaymentRecord": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "walletId": {
+            "type": "string"
+          },
+          "quoteHash": {
+            "type": "string"
+          },
+          "idempotencyKey": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "providerOrderId": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "providerAuthorizationId": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "providerCaptureId": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "referenceId": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "checkoutUrl": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "amount": {
+            "type": "number"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "expiresAt": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "capturedAt": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "shortUrl": {
+            "oneOf": [
+              {
+                "type": "string",
+                "description": "Legacy alias of checkoutUrl."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "providerLinkId": {
+            "oneOf": [
+              {
+                "type": "string",
+                "description": "Legacy alias of providerOrderId."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "providerPaymentId": {
+            "oneOf": [
+              {
+                "type": "string",
+                "description": "Legacy alias of providerCaptureId."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "sessionId",
+          "walletId",
+          "provider",
+          "amount",
+          "currency",
+          "status"
+        ],
+        "additionalProperties": true
+      },
+      "Reservation": {
+        "type": "object",
+        "properties": {
+          "reservation_id": {
+            "type": "string"
+          },
+          "session_id": {
+            "type": "string"
+          },
+          "wallet_id": {
+            "type": "string"
+          },
+          "amount": {
+            "type": "string",
+            "description": "Decimal string."
+          },
+          "currency": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "phase": {
+            "type": "string"
+          },
+          "provider_order_id": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "provider_authorization_id": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "provider_capture_id": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "expires_at": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "additionalProperties": true,
+        "description": "Wallet authority reservation row (snake_case column names as returned)."
+      },
+      "CreatePaymentResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": true
+          },
+          "duplicate": {
+            "type": "boolean",
+            "description": "True when a checkout order already existed for the session."
+          },
+          "payment": {
+            "$ref": "#/components/schemas/PaymentRecord"
+          },
+          "paymentLink": {
+            "$ref": "#/components/schemas/PaymentRecord"
+          }
+        },
+        "required": [
+          "ok",
+          "duplicate",
+          "payment"
+        ]
+      },
+      "GetPaymentResponse": {
+        "type": "object",
+        "properties": {
+          "payment": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PaymentRecord"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "paymentLink": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PaymentRecord"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reservation": {
+            "description": "Reservation row or null/absent when none.",
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Reservation"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "payment"
+        ]
+      },
+      "AuthorizePaymentResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": true
+          },
+          "duplicate": {
+            "type": "boolean"
+          },
+          "authorization": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Provider authorization details. Absent when duplicate is true."
+          },
+          "payment": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PaymentRecord"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "ok",
+          "duplicate"
+        ]
+      },
+      "CapturePaymentResponse": {
+        "type": "object",
+        "properties": {
+          "ok": {
+            "type": "boolean",
+            "const": true
+          },
+          "duplicate": {
+            "type": "boolean"
+          },
+          "capture": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Public capture details. Absent on some duplicate responses."
+          },
+          "payment": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/PaymentRecord"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "ok",
+          "duplicate"
+        ]
+      },
+      "ProofReceipt": {
+        "type": "object",
+        "properties": {
+          "receiptId": {
+            "type": "string"
+          },
+          "sessionId": {
+            "type": "string"
+          },
+          "walletId": {
+            "type": "string"
+          },
+          "proofHash": {
+            "type": "string"
+          },
+          "proofSignature": {
+            "type": "string"
+          },
+          "evidenceAuditHeadHash": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "payload": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "createdAt": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "receiptId",
+          "sessionId",
+          "walletId",
+          "proofHash",
+          "proofSignature",
+          "payload"
+        ]
+      },
+      "ProofVerification": {
+        "type": "object",
+        "properties": {
+          "verified": {
+            "type": "boolean",
+            "description": "True only when integrity checks pass and (for PayPal) the recipient is verified."
+          },
+          "integrityVerified": {
+            "type": "boolean"
+          },
+          "recipientVerified": {
+            "type": "boolean"
+          },
+          "recipientStatus": {
+            "type": "string",
+            "enum": [
+              "VERIFIED",
+              "LEGACY_OR_UNVERIFIED",
+              "NOT_APPLICABLE"
+            ]
+          },
+          "auditChainValid": {
+            "type": "boolean"
+          },
+          "checkedEvents": {
+            "type": "integer"
+          },
+          "currentAuditHeadHash": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "evidenceAuditHeadHash": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "proofHash": {
+            "type": "string"
+          },
+          "signaturePresent": {
+            "type": "boolean"
+          },
+          "payloadHashValid": {
+            "type": "boolean"
+          },
+          "signatureValid": {
+            "type": "boolean"
+          },
+          "evidenceHeadValid": {
+            "type": "boolean"
+          },
+          "receiptIdentityValid": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "verified",
+          "integrityVerified",
+          "recipientVerified",
+          "recipientStatus",
+          "auditChainValid",
+          "proofHash",
+          "signaturePresent"
+        ],
+        "additionalProperties": true
+      },
+      "ProofResponse": {
+        "type": "object",
+        "properties": {
+          "receipt": {
+            "$ref": "#/components/schemas/ProofReceipt"
+          },
+          "verification": {
+            "$ref": "#/components/schemas/ProofVerification"
+          }
+        },
+        "required": [
+          "receipt",
+          "verification"
+        ]
+      },
+      "ProofNotReady": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "string",
+            "const": "PROOF_NOT_READY"
+          },
+          "sessionStatus": {
+            "$ref": "#/components/schemas/SessionStatus"
+          }
+        },
+        "required": [
+          "error",
+          "sessionStatus"
+        ]
+      },
+      "RefundEvaluateRequest": {
+        "type": "object",
+        "properties": {
+          "amount": {
+            "type": "number",
+            "description": "Presentment amount to refund.",
+            "exclusiveMinimum": 0
+          },
+          "currency": {
+            "type": "string",
+            "description": "Defaults to the captured payment currency."
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "CUSTOMER_REQUEST",
+              "DUPLICATE_CHARGE",
+              "ITEM_NOT_RECEIVED",
+              "NOT_AS_DESCRIBED",
+              "OTHER"
+            ],
+            "default": "CUSTOMER_REQUEST",
+            "description": "Case-insensitive."
+          }
+        },
+        "required": [
+          "amount"
+        ]
+      },
+      "RefundEvaluateResponse": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "policy": {
+            "type": "object",
+            "properties": {
+              "decision": {
+                "type": "string",
+                "enum": [
+                  "ALLOW",
+                  "BLOCK"
+                ]
+              },
+              "violations": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "reasons": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "refundableRemaining": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "decision",
+              "violations",
+              "reasons",
+              "refundableRemaining"
+            ]
+          },
+          "refunds": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "capture": {
+            "type": "object",
+            "properties": {
+              "amount": {
+                "type": "number"
+              },
+              "currency": {
+                "type": "string"
+              },
+              "provider": {
+                "type": "string"
+              },
+              "captureId": {
+                "type": "string"
+              }
+            }
+          },
+          "requested": {
+            "type": "object",
+            "properties": {
+              "amount": {
+                "type": "number"
+              },
+              "currency": {
+                "type": "string"
+              }
+            }
+          },
+          "walletCredit": {
+            "type": "object",
+            "properties": {
+              "amount": {
+                "type": "number"
+              },
+              "currency": {
+                "type": "string"
+              }
+            }
+          },
+          "openDisputes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "disputeId": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        },
+        "required": [
+          "sessionId",
+          "reason",
+          "policy",
+          "capture",
+          "requested",
+          "walletCredit"
+        ]
+      },
+      "PostPurchaseState": {
+        "type": "object",
+        "properties": {
+          "session": {
+            "$ref": "#/components/schemas/Session"
+          },
+          "payment": {
+            "type": "object",
+            "additionalProperties": true,
+            "description": "Payment record (null when none)."
+          },
+          "refunds": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "disputes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        },
+        "additionalProperties": true,
+        "description": "Read-only post-purchase snapshot. Exact inner shapes are not pinned by this contract."
+      },
+      "Health": {
+        "type": "object",
+        "properties": {
+          "service": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "release": {
+            "type": "string"
+          },
+          "gitCommit": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "deploymentEnvironment": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "databaseConfigured": {
+            "type": "boolean"
+          },
+          "redisConfigured": {
+            "type": "boolean"
+          },
+          "razorpayConfigured": {
+            "type": "boolean"
+          },
+          "webhookConfigured": {
+            "type": "boolean",
+            "description": "Legacy: Razorpay webhook only."
+          },
+          "razorpayWebhookConfigured": {
+            "type": "boolean"
+          },
+          "paypalWebhookConfigured": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "service",
+          "status",
+          "version"
+        ]
+      },
+      "PaymentProvider": {
+        "type": "object",
+        "properties": {
+          "mode": {
+            "type": "string"
+          },
+          "paypalEnvironment": {
+            "type": "string"
+          },
+          "legacyDefault": {
+            "type": "string"
+          },
+          "selection": {
+            "type": "string",
+            "const": "PER_TRANSACTION_CAPABILITY"
+          },
+          "paypalConfigured": {
+            "type": "boolean"
+          },
+          "recipientMappingConfigured": {
+            "type": "boolean"
+          },
+          "paypalReadiness": {
+            "type": "object",
+            "properties": {
+              "ready": {
+                "type": "boolean"
+              },
+              "missing": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "issues": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "executionLock": {
+                "type": "string"
+              },
+              "verification": {
+                "type": "string"
+              }
+            }
+          },
+          "razorpayConfigured": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "mode",
+          "paypalEnvironment",
+          "selection",
+          "paypalConfigured",
+          "paypalReadiness"
+        ]
+      },
+      "PaymentCapabilities": {
+        "type": "object",
+        "properties": {
+          "context": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "selected": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "evaluated": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "context",
+          "evaluated"
+        ]
+      },
+      "AuthorizeStatus": {
+        "type": "object",
+        "properties": {
+          "service": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "configured": {
+            "type": "boolean"
+          },
+          "decisions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Decision"
+            }
+          },
+          "tokenType": {
+            "type": "string",
+            "const": "INTENTLOCK_AUTH_V1"
+          }
+        },
+        "required": [
+          "service",
+          "version",
+          "configured",
+          "decisions",
+          "tokenType"
+        ]
+      },
+      "AuthorizeRequest": {
+        "type": "object",
+        "properties": {
+          "idempotencyKey": {
+            "type": "string",
+            "minLength": 1
+          },
+          "agentId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "walletId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "merchant": {
+            "type": "string",
+            "minLength": 1
+          },
+          "transaction": {
+            "$ref": "#/components/schemas/WalletTransaction"
+          },
+          "quoteHash": {
+            "type": "string",
+            "description": "Optional; must match the server-computed hash or 409 QUOTE_HASH_MISMATCH is returned."
+          }
+        },
+        "required": [
+          "idempotencyKey",
+          "agentId",
+          "walletId",
+          "merchant",
+          "transaction"
+        ]
+      },
+      "AuthorizeResponse": {
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string"
+          },
+          "idempotent": {
+            "type": "boolean"
+          },
+          "decision": {
+            "$ref": "#/components/schemas/Decision"
+          },
+          "walletId": {
+            "type": "string"
+          },
+          "agentId": {
+            "type": "string"
+          },
+          "merchant": {
+            "type": "string"
+          },
+          "quoteHash": {
+            "type": "string"
+          },
+          "violations": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "remainingAuthority": {
+            "type": "number"
+          },
+          "additionalAuthorityRequired": {
+            "type": "number"
+          },
+          "stepUpRequestId": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "authorization": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "authorizationId": {
+                    "type": "string"
+                  },
+                  "token": {
+                    "type": "string",
+                    "description": "Signed INTENTLOCK_AUTH_V1 token. Issued only for ALLOW."
+                  },
+                  "expiresAt": {
+                    "type": "string",
+                    "format": "date-time"
+                  }
+                },
+                "required": [
+                  "authorizationId",
+                  "token",
+                  "expiresAt"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "requestId",
+          "idempotent",
+          "decision",
+          "walletId",
+          "agentId",
+          "merchant",
+          "quoteHash",
+          "violations",
+          "reasons",
+          "remainingAuthority",
+          "additionalAuthorityRequired",
+          "stepUpRequestId",
+          "authorization"
+        ]
+      },
+      "VerifyRequest": {
+        "type": "object",
+        "properties": {
+          "token": {
+            "type": "string",
+            "description": "Token returned by /v1/authorize.",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "token"
+        ]
+      },
+      "VerifyResponse": {
+        "type": "object",
+        "properties": {
+          "valid": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string",
+            "description": "Present when valid is false (for example MALFORMED_TOKEN, INVALID_SIGNATURE, CLIENT_MISMATCH, AUTHORIZATION_NOT_FOUND, TOKEN_HASH_MISMATCH, WALLET_ACCESS_REVOKED)."
+          },
+          "payload": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "requestId": {
+            "type": "string"
+          },
+          "quoteHash": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "valid"
+        ]
+      }
+    }
+  }
+}

@@ -11,6 +11,8 @@ import { handleWhatsappRoutes } from "./whatsapp/routes";
 import { handleSessionRoutes } from "./sessions/routes";
 import { handleCommerceRoutes } from "./commerce/routes";
 import { handleWalletRoutes } from "./wallets/routes";
+import { handleMcpRoutes } from "./mcp/server";
+import { handleControlStudioRoutes } from "./control-studio/routes";
 ﻿import { runFullEvalSuite } from "./evals/run";
 import { routeAgentRequest } from "agents";
 import {
@@ -133,6 +135,10 @@ const worker = {
     if(authorityResponse)return authorityResponse;
     const walletRouteResponse = await handleWalletRoutes(request, env, url);
     if (walletRouteResponse) return walletRouteResponse;
+
+    // Read-only, redacted analytics dataset scoped to the caller's wallets.
+    const controlStudioResponse = await handleControlStudioRoutes(request, env, url);
+    if (controlStudioResponse) return controlStudioResponse;
 
     const commerceRouteResponse = await handleCommerceRoutes(request, env, url);
     if (commerceRouteResponse) return commerceRouteResponse;
@@ -641,6 +647,10 @@ const worker = {
         );
       }
     }
+
+    // Read/evaluate-only MCP tools for external agents; per-tool resource checks inside.
+    const mcpResponse = await handleMcpRoutes(request, env, url);
+    if (mcpResponse) return mcpResponse;
 
     const agentResponse = await routeAgentRequest(request, env);
     if (agentResponse) return agentResponse;

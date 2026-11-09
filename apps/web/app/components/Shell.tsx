@@ -17,6 +17,7 @@ const groups:{label:string,items:NavItem[]}[]=[
   {href:'/trust-center',label:'Transaction control',icon:'pulse',subtitle:'Follow settlement and evidence'},
   {href:'/post-purchase',label:'Post-purchase',icon:'repeat',subtitle:'Refunds and disputes'},
   {href:'/audit',label:'Audit trail',icon:'list',subtitle:'Event history'},
+  {href:'/control-studio',label:'Control Studio',icon:'pulse',subtitle:'Read-only operator analytics'},
  ]},
  {label:'UNDER THE HOOD',items:[
   {href:'/trust',label:'Trust & risk',icon:'shield',subtitle:'Financial safeguards'},

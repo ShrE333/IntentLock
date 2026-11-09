@@ -39,3 +39,20 @@ describe('gate uses configured limits',()=>{
  it('wallet overrides',async()=>{await wallet({...base,DEMO_WALLETS_PER_PRINCIPAL_PER_HOUR:'10',DEMO_WALLETS_PER_IP_PER_HOUR:'100'});expect(max('wallet:')).toBe(10);expect(max('wallet-ip:')).toBe(100);});
  it('wallet invalid falls back',async()=>{await wallet({...base,DEMO_WALLETS_PER_PRINCIPAL_PER_HOUR:'5000',DEMO_WALLETS_PER_IP_PER_HOUR:''});expect(max('wallet:')).toBe(2);expect(max('wallet-ip:')).toBe(6);});
 });
+
+describe('MCP demo requests',()=>{
+ const mcp=(headers:Record<string,string>={})=>secureFinancialRequest(new Request('https://w.test/mcp',{method:'POST',headers:{'cf-connecting-ip':'192.0.2.1',authorization:'Bearer '+token,'content-type':'application/json',...headers},body:'{"jsonrpc":"2.0","id":1,"method":"ping"}'}),base,next);
+ it('reach the read-only MCP handler without a per-request nonce, under their own limit',async()=>{
+  const r=await mcp();expect(r.status).toBe(201);
+  expect(repo.claimNonce).not.toHaveBeenCalled();
+  expect(max('mcp:')).toBe(60);expect(max('mutation:')).toBeUndefined();
+ });
+ it('are refused with 429 when the MCP limit is exhausted',async()=>{
+  vi.mocked(repo.rateLimit).mockImplementation(async(_d,key)=>!String(key).startsWith('mcp:'));
+  expect((await mcp()).status).toBe(429);
+ });
+ it('other demo POSTs still require a request id',async()=>{
+  const r=await secureFinancialRequest(new Request('https://w.test/api/sessions',{method:'POST',headers:{'cf-connecting-ip':'192.0.2.1',authorization:'Bearer '+token,'content-type':'application/json'},body:JSON.stringify({walletId:'iw_x',connectorId:'paypal-demo-marketplace',prompt:'headphones'})}),base,next);
+  expect(r.status).toBe(400);expect(await r.json()).toEqual({error:'REQUEST_ID_REQUIRED'});
+ });
+});

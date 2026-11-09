@@ -385,3 +385,23 @@ html{scroll-behavior:smooth}body{margin:0;background:var(--ix-paper)}
 .revokeButton{background:#8e3830;color:#fff;border:1px solid #8e3830}.revokeButton:hover:not(:disabled){background:#6f2a24}
 .revokeButton:disabled{opacity:.55;cursor:not-allowed}
 /* ===== END AGENT KILL SWITCH ===== */
+
+/* ===== CONTROL STUDIO (AG Studio operator analytics) ===== */
+.cs-page{width:100%;max-width:1600px;margin:0 auto;padding:28px clamp(16px,3vw,40px) 40px;display:flex;flex-direction:column;gap:18px}
+.cs-head{display:flex;justify-content:space-between;align-items:flex-end;gap:20px;flex-wrap:wrap}
+.cs-head h1{margin:6px 0 8px;font-size:34px;letter-spacing:-.04em;font-weight:650;color:var(--ix-ink)}
+.cs-badge{display:inline-block;margin:0;padding:5px 10px;background:var(--ix-citron);color:#1d271f;font:600 10px var(--ix-mono);letter-spacing:.06em;text-transform:uppercase}
+.cs-controls{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.cs-seg{display:inline-flex;border:1px solid var(--ix-border);background:var(--ix-white)}
+.cs-seg button{border:0;background:transparent;padding:9px 16px;font:600 12px var(--ix-mono);color:var(--ix-muted)}
+.cs-seg button.cs-seg-on{background:var(--il-accent);color:#fff}
+.cs-ghost{border:1px solid var(--ix-border);background:var(--ix-white);color:var(--ix-ink);padding:9px 14px;font-size:12px;font-weight:600}
+.cs-ghost:disabled{opacity:.55;cursor:not-allowed}
+.cs-studio{height:max(760px,calc(100vh - 260px));border:1px solid var(--ix-border);background:var(--ix-paper)}
+.cs-state{border:1px solid var(--ix-border);background:var(--ix-white);padding:36px;max-width:680px;display:flex;flex-direction:column;gap:12px;align-items:flex-start}
+.cs-state p{margin:0;color:var(--ix-muted);line-height:1.6}
+.cs-error{border-color:#e5b8ad;background:#fbf1ee}
+.cs-loading{padding:24px;color:var(--ix-muted);font:600 11px var(--ix-mono)}
+.cs-foot{margin:0;color:var(--ix-soft);font:500 10px var(--ix-mono)}
+.ix-workspace-main:has(.cs-page){align-self:stretch;width:100%}
+/* ===== END CONTROL STUDIO ===== */

@@ -28,6 +28,14 @@ Run the same purchase with a **simulated compromised agent** that obeys merchant
 
 The safe purchase then runs through real PayPal Sandbox checkout. In live mode the same panel shows what a real Workers AI model proposed.
 
+## Built for other agents and real catalogs
+
+These are built and tested locally; see "Honest scope" for what is verified live.
+
+- **IntentLock MCP server** (`POST /mcp`). Any MCP-capable agent can list the wallets it may use, ask IntentLock to evaluate a purchase *before* buying, read a session and verify a proof receipt. It is read and evaluate only: no tool can check out, capture, refund or revoke. Suspected prompt injection in merchant text tightens ALLOW to STEP_UP. See [docs/mcp/README.md](../mcp/README.md).
+- **Channel3 real-product discovery.** The policy engine evaluates real listings from Channel3's multi-retailer catalog. Real listings are discovery only: their sellers are not verified PayPal payees, so checkout stays impossible by construction.
+- **Public API contract.** OpenAPI 3.1 and a Postman collection in [docs/api/](../api/README.md), checked against the router by a contract test.
+
 ## PayPal integration
 
 | PayPal API | Use |
@@ -47,6 +55,7 @@ On 2026-11-09, against the deployed demo Worker and **PayPal Sandbox**, the foll
 - the `PAYMENT.CAPTURE.COMPLETED` webhook was verified by PayPal's signature API, queued, and settled with **exactly one** ledger debit
 - a signed proof receipt was created and the session reached `CAPTURED`
 - **a second delivery of the same webhook was idempotent:** no second debit
+- the **refund firewall** returned an over-refund (USD 100 against USD 49) as BLOCK without calling PayPal; a USD 10 partial refund then ran through PayPal, and wallet authority was restored only after PayPal's authenticated refund read confirmed `COMPLETED`
 
 The engineering behind this:
 - About 800 automated tests run against real PostgreSQL semantics (PGlite), covering concurrency, replay and failure paths.
@@ -57,8 +66,9 @@ The engineering behind this:
 This is a sandbox system, not a production payment product. These are **not** done:
 - real merchant onboarding
 - live FX rates (static demo rates are labelled as such)
-- a real PayPal refund or dispute drill (the code exists and is tested; it has not been exercised live)
+- a real PayPal dispute drill (the code exists and is tested; it has not been exercised live)
 - Shopify, eBay, WhatsApp and Razorpay end-to-end (connectors are discovery-only or unverified)
+- Channel3 live access and the MCP server on the deployed Worker (built and tested locally; not yet exercised live)
 
 Live Workers AI output varies by model and run. The compromised-agent mode is a labelled, deterministic simulation for a reliable demo.
 

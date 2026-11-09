@@ -3,10 +3,11 @@ import {safeEqualText} from '../authorize/crypto';
 import {ACCESS_CONTEXT,AccessError,DEMO_SCOPES,hasScope,newDemoToken,sha256,type Identity,type Permission} from './identity';
 import * as store from './repository';
 
-export type FinancialAccessEnv={DATABASE_URL?:string;DEMO_ACCESS_ENABLED?:string;PAYPAL_ENV?:string;TRUSTOPS_ADMIN_TOKEN?:string;INTENTLOCK_ADMIN_KEY?:string;SHOPIFY_GLOBAL_CATALOG_ENABLED?:string;DEMO_ISSUE_PER_IP_PER_HOUR?:string;DEMO_ISSUE_GLOBAL_PER_HOUR?:string;DEMO_WALLETS_PER_PRINCIPAL_PER_HOUR?:string;DEMO_WALLETS_PER_IP_PER_HOUR?:string};
+export type FinancialAccessEnv={DATABASE_URL?:string;DEMO_ACCESS_ENABLED?:string;PAYPAL_ENV?:string;TRUSTOPS_ADMIN_TOKEN?:string;INTENTLOCK_ADMIN_KEY?:string;SHOPIFY_GLOBAL_CATALOG_ENABLED?:string;CHANNEL3_ENABLED?:string;CHANNEL3_SEARCHES_PER_PRINCIPAL_PER_HOUR?:string;CHANNEL3_SEARCHES_GLOBAL_PER_HOUR?:string;DEMO_ISSUE_PER_IP_PER_HOUR?:string;DEMO_ISSUE_GLOBAL_PER_HOUR?:string;DEMO_WALLETS_PER_PRINCIPAL_PER_HOUR?:string;DEMO_WALLETS_PER_IP_PER_HOUR?:string};
 // Strict integer parse in [1,max]; anything else falls back to the default (never unlimited).
 export function demoLimit(raw:unknown,def:number,max=1000):number{if(typeof raw!=='string'||!/^\d{1,5}$/.test(raw.trim()))return def;const n=Number(raw.trim());return Number.isSafeInteger(n)&&n>=1&&n<=max?n:def;}
 export const demoRateLimits=(env:FinancialAccessEnv)=>({issuePerIp:demoLimit(env.DEMO_ISSUE_PER_IP_PER_HOUR,3),issueGlobal:demoLimit(env.DEMO_ISSUE_GLOBAL_PER_HOUR,200,10000),walletsPerPrincipal:demoLimit(env.DEMO_WALLETS_PER_PRINCIPAL_PER_HOUR,2),walletsPerIp:demoLimit(env.DEMO_WALLETS_PER_IP_PER_HOUR,6)});
+export const channel3Limits=(env:FinancialAccessEnv)=>({perPrincipal:demoLimit(env.CHANNEL3_SEARCHES_PER_PRINCIPAL_PER_HOUR,10,100),global:demoLimit(env.CHANNEL3_SEARCHES_GLOBAL_PER_HOUR,30,300)});
 const json=(body:unknown,status=200)=>new Response(JSON.stringify(body),{status,headers:{'content-type':'application/json','cache-control':'no-store'}});
 const bearer=(r:Request)=>r.headers.get('authorization')?.match(/^Bearer ([^\s]+)$/i)?.[1]??r.headers.get('x-intentlock-key')??'';
 const sandbox=(env:FinancialAccessEnv)=>env.DEMO_ACCESS_ENABLED==='true'&&String(env.PAYPAL_ENV??'sandbox').toLowerCase()==='sandbox';
@@ -64,6 +65,9 @@ export function accessRule(path:string,method:string):Rule|null{
  if((m=path.match(/^\/api\/audit\/([^/]+)$/))&&get)return {scope:'financial:read',kind:'audit',id:m[1],permission:'read'};
  if(path==='/api/intents/parse'&&post)return {scope:'intent:create'};
  if(path==='/api/evals'&&get)return {scope:'financial:read'};
+ // Any method, so GET reaches the handler's 405; tools perform their own wallet/session checks.
+ if(path==='/mcp')return {scope:'financial:read'};
+ if(path==='/api/control-studio/dataset')return get?{scope:'financial:read'}:null;
  if(path==='/api/evaluate'&&post)return {scope:'legacy:evaluate'};
  if(['/api/approvals/create','/api/approvals/verify','/api/security/prompt-injection-demo','/api/security/stale-price-demo','/api/security/duplicate-checkout-demo'].includes(path)&&post)return {scope:'legacy:evaluate',kind:'intent',bodyKey:'intent'};
  if(path==='/api/payments/create-link'&&post)return {scope:'ops',ops:true};
@@ -133,10 +137,15 @@ export async function secureFinancialRequest<T extends FinancialAccessEnv>(reque
        if(!await store.rateLimit(db,`wallet:${identity.principalId}`,demoRateLimits(env).walletsPerPrincipal,3600)||!await store.rateLimit(db,`wallet-ip:${ip}`,demoRateLimits(env).walletsPerIp,3600))throw new AccessError(429,'DEMO_WALLET_LIMIT');
      }
      if((path==='/api/sessions'||path==='/api/commerce/search')&&request.method==='POST'&&body?.connectorId!=='paypal-demo-marketplace'
-       &&!(path==='/api/commerce/search'&&body?.connectorId==='shopify-global-catalog'&&env.SHOPIFY_GLOBAL_CATALOG_ENABLED==='true'))throw new AccessError(403,'DEMO_CONNECTOR_ONLY');
+       &&!(path==='/api/commerce/search'&&body?.connectorId==='shopify-global-catalog'&&env.SHOPIFY_GLOBAL_CATALOG_ENABLED==='true')
+       &&!(path==='/api/commerce/search'&&body?.connectorId==='channel3-catalog'&&env.CHANNEL3_ENABLED==='true'))throw new AccessError(403,'DEMO_CONNECTOR_ONLY');
      if(path==='/api/sessions'&&request.method==='POST'&&body?.channel&&body.channel!=='WEB')throw new AccessError(403,'DEMO_CHANNEL_ONLY');
      if(path==='/api/trust-center/reconciliation'&&url.searchParams.get('deep')==='1')throw new AccessError(403,'OPERATOR_REQUIRED');
-     if(request.method==='POST'){
+     // MCP is read/evaluate-only (no side effects to replay) and standard MCP clients cannot
+     // mint a per-request nonce, so it gets its own read-tier limit instead of the mutation rules.
+     if(request.method==='POST'&&path==='/mcp'){
+       if(!await store.rateLimit(db,`mcp:${identity.principalId}`,60,60))throw new AccessError(429,'DEMO_MCP_LIMIT');
+     }else if(request.method==='POST'){
        if(!await store.rateLimit(db,`mutation:${identity.principalId}`,10,60))throw new AccessError(429,'DEMO_MUTATION_LIMIT');
        const nonce=request.headers.get('x-intentlock-request-id');if(!nonce||!/^[-a-zA-Z0-9_]{16,128}$/.test(nonce))throw new AccessError(400,'REQUEST_ID_REQUIRED');
        if(!await store.claimNonce(db,identity.principalId,nonce,identity.expiresAt!))throw new AccessError(409,'REQUEST_REPLAYED');
@@ -144,6 +153,10 @@ export async function secureFinancialRequest<T extends FinancialAccessEnv>(reque
    }
    if(path==='/api/commerce/search'&&request.method==='POST'&&body?.connectorId==='shopify-global-catalog'){
      if(!await store.rateLimit(db,`catalog:${identity.principalId}`,10,60)||!await store.rateLimit(db,'catalog:global',60,60))throw new AccessError(429,'SHOPIFY_CATALOG_RATE_LIMITED');
+   }
+   if(path==='/api/commerce/search'&&request.method==='POST'&&body?.connectorId==='channel3-catalog'){
+     const lim=channel3Limits(env);
+     if(!await store.rateLimit(db,`channel3:${identity.principalId}`,lim.perPrincipal,3600)||!await store.rateLimit(db,'channel3:global',lim.global,3600))throw new AccessError(429,'CHANNEL3_RATE_LIMITED');
    }
    if(path.startsWith('/api/wallet-authority/')&&request.method==='POST'){
      if(!await store.rateLimit(db,`wallet-compiler:${identity.principalId}`,6,60)||!await store.rateLimit(db,'wallet-compiler:global',60,60))throw new AccessError(429,'WALLET_COMPILER_RATE_LIMITED');

@@ -22,3 +22,7 @@
 .commercePage .featureRow { display: flex; flex-wrap: wrap; gap: 8px; }
 @media (max-width: 700px) { .commercePage .commerceSearchGrid { grid-template-columns: minmax(0,1fr); } }
 @media (min-width: 1100px) { .commercePage .commerceSearchGrid { grid-template-columns: minmax(0,1fr) minmax(0,1fr) minmax(0,2fr) auto; } .commercePage .commerceQuery { grid-column: auto; } }
+
+/* ===== REAL LISTING BADGE ===== */
+.realListingBadge{margin:0 0 12px;padding:8px 10px;border:1px solid #c9b46a;background:#fbf4d9;color:#5b4a12;font-size:12px;line-height:1.5;font-weight:600}
+/* ===== END REAL LISTING BADGE ===== */

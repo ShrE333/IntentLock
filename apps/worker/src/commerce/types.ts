@@ -48,7 +48,7 @@ export type CommerceSearchQuery = {
 export type CommerceConnectorInfo = {
   id:string;
   name:string;
-  kind:"DEMO"|"PAYPAL_DEMO"|"EBAY"|"HTTP_JSON"|"SHOPIFY"|"AMAZON_CREATORS"|"INDIAMART";
+  kind:"DEMO"|"PAYPAL_DEMO"|"EBAY"|"HTTP_JSON"|"SHOPIFY"|"AMAZON_CREATORS"|"INDIAMART"|"CHANNEL3";
   enabled:boolean;
   description:string;
 };
@@ -58,3 +58,6 @@ export interface CommerceConnector {
   search(query:CommerceSearchQuery):Promise<CommerceProduct[]>;
   getProduct(id:string):Promise<CommerceProduct|null>;
 }
+
+// Real-listing connectors whose sellers are not verified payees: search/policy comparison only, never a session or checkout.
+export const DISCOVERY_ONLY_CONNECTORS:ReadonlySet<string>=new Set(['shopify-global-catalog','channel3-catalog']);

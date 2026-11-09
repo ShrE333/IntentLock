@@ -89,3 +89,12 @@ NATURAL_LANGUAGE_WALLETS_ENABLED=true
 # DEMO_ISSUE_GLOBAL_PER_HOUR=200          # capability issuance across all IPs, 1-10000
 # DEMO_WALLETS_PER_PRINCIPAL_PER_HOUR=2   # demo wallets per demo principal, 1-1000
 # DEMO_WALLETS_PER_IP_PER_HOUR=6          # demo wallets per IP, 1-1000
+
+# Channel3 real-product discovery (discovery only; never purchasable). Off by default.
+# CHANNEL3_API_KEY must be a Worker SECRET (wrangler secret put CHANNEL3_API_KEY), never a [vars] entry.
+# CHANNEL3_ENABLED=true
+# CHANNEL3_COUNTRY=US                          # 2 uppercase letters; invalid values fall back to US
+# Channel3 request timeout in ms (3000-30000; default 20000). Semantic search can be slow from some regions.
+# CHANNEL3_TIMEOUT_MS=20000
+# CHANNEL3_SEARCHES_PER_PRINCIPAL_PER_HOUR=10  # demo searches per principal, 1-100
+# CHANNEL3_SEARCHES_GLOBAL_PER_HOUR=30         # demo searches across all principals, 1-300 (free tier: 1,000/month)

@@ -9,6 +9,7 @@
     "typecheck": "tsc --noEmit --strict",
     "check:demo": "node scripts/sandbox-tools.mjs config",
     "dry-run:demo": "node scripts/sandbox-tools.mjs dry-run",
+    "check:channel3": "node --dns-result-order=ipv4first scripts/channel3-check.mjs",
     "check:paypal": "node scripts/sandbox-tools.mjs readiness",
     "test:sandbox": "node scripts/paypal-sandbox-e2e.mjs"
   },

@@ -50,7 +50,9 @@ const money=(n:number,currency?:string|null)=>{
   }
 };
 
-const connectorMode=(kind:string)=>["EBAY","SHOPIFY","HTTP_JSON"].includes(kind)?"LIVE":"DEMO";
+const connectorMode=(kind:string)=>["EBAY","SHOPIFY","HTTP_JSON","CHANNEL3"].includes(kind)?"LIVE":"DEMO";
+const isReal=(c:Candidate)=>c.product.source?.provider==='channel3';
+const REAL_LABEL='Real listing · discovery only — not purchasable through IntentLock (seller is not a verified PayPal payee)';
 const walletReady=(w:Wallet)=>w.status==="ACTIVE"&&new Date(w.validUntil).getTime()>Date.now()+15*60*1000&&(w.totalAuthority-w.spentAmount)>0;
 const friendly=(code:string)=>({WALLET_EXPIRED:"Wallet expired",WALLET_REVOKED:"Wallet revoked",MAX_SINGLE_TRANSACTION_EXCEEDED:"Above hard ceiling",REMAINING_AUTHORITY_EXCEEDED:"Insufficient remaining authority",CATEGORY_NOT_ALLOWED:"Category not allowed",BRAND_BLOCKED:"Brand blocked",BRAND_NOT_ALLOWED:"Brand not allowed",REQUIRED_FEATURE_MISSING:"Required feature missing"} as Record<string,string>)[code]??code.replaceAll("_"," ");
 
@@ -73,7 +75,7 @@ export default function CommercePage(){
         getJson<{wallets:Wallet[]}>("/api/wallets"),
         getJson<{connectors:Connector[]}>("/api/commerce/connectors")
       ]);
-      setWallets(w.wallets);setConnectors(c.connectors.filter(x=>['paypal-demo-marketplace','shopify-global-catalog'].includes(x.id)));
+      setWallets(w.wallets);setConnectors(c.connectors.filter(x=>['paypal-demo-marketplace','shopify-global-catalog','channel3-catalog'].includes(x.id)));
       if(!walletId){const ready=w.wallets.find(walletReady);if(ready) setWalletId(ready.walletId);}
       const preferred=c.connectors.find(x=>x.enabled&&x.id==="paypal-demo-marketplace")??
         c.connectors.find(x=>x.enabled);
@@ -126,8 +128,10 @@ export default function CommercePage(){
       <button className="button buttonPrimary" onClick={search} disabled={!!busy}>Search Marketplace</button>
     </div></article>
 
-    <section className="connectorStrip">{connectors.map(c=><div key={c.id} className={c.enabled?"connectorChip active":"connectorChip"}><strong>{c.name}</strong><span>{c.enabled?`${connectorMode(c.kind)} · CONFIGURED`:"ADAPTER SLOT"}</span></div>)}</section>
+    <section className="connectorStrip">{connectors.map(c=><div key={c.id} className={c.enabled?"connectorChip active":"connectorChip"}><strong>{c.name}</strong><span>{c.enabled?`${connectorMode(c.kind)} · CONFIGURED`:c.id==="channel3-catalog"?"UNAVAILABLE · NOT CONFIGURED":"ADAPTER SLOT"}</span></div>)}</section>
     {connectorId==='shopify-global-catalog'&&<div className="alert alertInfo">Live Shopify catalog discovery only. ALLOW is a policy evaluation, not payment permission. No cart, checkout or merchant fulfillment is created. Inferred attributes cannot satisfy hard wallet restrictions.</div>}
+
+    {connectorId==='channel3-catalog'&&<div className="alert alertInfo">Channel3 real product discovery only. Listings are real products from third-party sellers; ALLOW is a policy evaluation, not payment permission. No cart, checkout or order is created and sellers are not verified payees.</div>}
 
     {busy&&<div className="alert alertInfo">{busy}</div>}
     {error&&<div className="alert alertError">{error}</div>}
@@ -140,7 +144,8 @@ export default function CommercePage(){
         <div className="resultCounts"><span>ALLOW {candidates.filter(c=>c.policy.decision==="ALLOW").length}</span><span>STEP_UP {candidates.filter(c=>c.policy.decision==="STEP_UP").length}</span><span>BLOCK {candidates.filter(c=>c.policy.decision==="BLOCK").length}</span></div>
       </div>
       <div className="commerceGrid">{candidates.map(c=><article key={c.product.id} className={`commerceCard ${c.policy.decision.toLowerCase()}`}>
-        {c.product.imageUrl&&<img src={c.product.imageUrl} alt="" loading="lazy" referrerPolicy="no-referrer" style={{width:"100%",height:180,objectFit:"contain",borderRadius:12,background:"#fff",marginBottom:14}}/>}
+        {c.product.imageUrl&&<img src={c.product.imageUrl} alt={`${c.product.title} product image`} loading="lazy" referrerPolicy="no-referrer" style={{width:"100%",height:180,objectFit:"contain",borderRadius:12,background:"#fff",marginBottom:14}}/>}
+        {isReal(c)&&<div className="realListingBadge" role="note">{REAL_LABEL}</div>}
         <div className="commerceCardTop"><div><span className="merchantName">{c.product.merchant} · {c.product.merchantCountry??"--"}</span><h3>{c.product.title}</h3><div className="productMeta">{c.product.brand} · {c.product.category}{c.product.source?.marketplaceId?` · ${c.product.source.marketplaceId}`:""}</div></div><span className={`commerceDecision ${c.policy.decision.toLowerCase()}`}>{c.policy.decision}</span></div>
         <div className="commercePrice">{c.product.discovery?new Intl.NumberFormat('en-US',{style:'currency',currency:c.product.currency,minimumFractionDigits:c.product.discovery.minorDigits,maximumFractionDigits:c.product.discovery.minorDigits}).format(c.product.price):money(c.product.price,c.product.currency)}</div>
         {c.product.discovery&&<div className="quoteBinding">
@@ -160,13 +165,13 @@ export default function CommercePage(){
         {c.walletAmount!=null&&<div className="policyBox"><p>Wallet authority cost: <strong>{money(c.walletAmount,c.walletCurrency)}</strong>{c.fxQuote?` · ${c.fxQuote.source}`:" · same currency"}</p></div>}
         {c.fxQuote&&<div className="quoteBinding"><span>FX bound until {new Date(c.fxQuote.expiresAt).toLocaleTimeString()}</span><code>{c.fxQuote.quoteId} · 1 {c.fxQuote.fromCurrency} = {c.fxQuote.rate.toFixed(6)} {c.fxQuote.toCurrency}</code></div>}
         <div className="featureRow">{c.product.features.map(f=><span key={f}>{f}</span>)}</div>
-        {c.merchantMessage&&<div className="merchantMessage"><div className="merchantMessageHeader"><span>{c.product.discovery?'CATALOG TEXT · MAY BE INFERRED':'MERCHANT-SUPPLIED TEXT'}</span><strong>UNTRUSTED</strong></div><p>{c.merchantMessage}</p></div>}
+        {c.merchantMessage&&<div className="merchantMessage"><div className="merchantMessageHeader"><span>{c.product.discovery?'CATALOG TEXT · MAY BE INFERRED':isReal(c)?'SELLER LISTING TEXT':'MERCHANT-SUPPLIED TEXT'}</span><strong>UNTRUSTED</strong></div><p>{c.merchantMessage}</p></div>}
         <div className="policyBox">
-          {c.policy.decision==="ALLOW"&&<p>{c.product.discovery?'Policy evaluation passed; financial execution remains disabled.':'✓ Fully inside normalized autonomous authority.'}</p>}
+          {c.policy.decision==="ALLOW"&&<p>{c.product.discovery||isReal(c)?'Policy evaluation passed; financial execution remains disabled.':'✓ Fully inside normalized autonomous authority.'}</p>}
           {c.policy.decision==="STEP_UP"&&<p>⚠ Human step-up required: +{money(c.policy.additionalAuthorityRequired,c.walletCurrency)}</p>}
           {c.policy.decision==="BLOCK"&&<p>✕ {[...c.policy.violations.map(friendly),...c.policy.reasons].join(" · ")}</p>}
         </div>
-        {c.product.productUrl&&<a className="button buttonSecondary" href={c.product.productUrl} target="_blank" rel="noreferrer">Open marketplace listing</a>}
+        {c.product.productUrl&&<a className="button buttonSecondary" href={c.product.productUrl} target="_blank" rel="noopener noreferrer">{isReal(c)?`View offer at ${c.product.merchant}`:"Open marketplace listing"}</a>}
       </article>)}</div>
     </section>}
   </div></Shell>;

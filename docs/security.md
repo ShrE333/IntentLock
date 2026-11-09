@@ -18,6 +18,11 @@ to 1.19.18, which fixes high findings but retains a moderate repeated-decoding
 static-path middleware advisory (GHSA-rmxm-3fg6-px4f). Its dependency chain also
 marks MCP SDK, Agents and ai-chat affected. A v2 adapter migration remains open.
 Do not interpret absence of a known reachable static-serving path as a fix.
+Re-checked 2026-11-09 with `npm audit --omit=dev`: this is the only remaining
+finding (1 moderate). `@hono/node-server` enters only via agents ->
+@modelcontextprotocol/sdk; IntentLock source never imports it or `serveStatic`,
+and the Worker runs on the Cloudflare runtime rather than a Node HTTP server.
+The fix exists only in the 2.x line, so the v2 migration remains open.
 
 Production release requires reviewing that advisory, running the final audited
 dependency tree through CI and testing actual provider/queue behavior. Scope here
