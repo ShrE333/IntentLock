@@ -5,6 +5,7 @@ import {Shell} from "../components/Shell";
 import {getJson,postJson} from "../lib";
 import {refreshWithError} from '../runtime-config';
 import {sandboxWalletAvailable} from '../demo-evidence';
+import "./purchase-flow.css";
 
 type FxQuote={
   quoteId:string;fromCurrency:string;toCurrency:string;rate:number;fromAmount:number;toAmount:number;
@@ -141,6 +142,128 @@ function agentFromEvents(events:Event[],session:Session|null):AgentRun|null{
   };
 }
 
+// ---- Presentation-only derived helpers (no I/O, no state transitions) ----
+type StepState="done"|"current"|"pending"|"blocked"|"skipped";
+type Step={key:string;label:string;state:StepState;note:string};
+const STEP_LABELS=["Intent","Discovery","Agent proposal","Policy decision","Checkout","Buyer approval","Capture","Verified settlement","Proof"];
+
+// Lifecycle position is derived only from session.status, falling back to recorded events.
+function buildSteps(session:Session,events:Event[],agent:AgentRun|null):Step[]{
+  const has=(...t:string[])=>events.some(e=>t.includes(e.eventType));
+  const st=session.status;
+  const proofDone=!!session.proofReceiptId||has("PROOF_RECEIPT_CREATED");
+  const captured=st==="CAPTURED"||has("PAYMENT_CAPTURED","WALLET_SPEND_APPLIED");
+  const fromEvents=()=>{
+    if(proofDone) return 9;
+    if(captured) return 8;
+    if(has("PAYPAL_CAPTURE_REQUESTED")) return 7;
+    if(has("PAYPAL_AUTHORIZED")) return 6;
+    if(has("PAYMENT_CHECKOUT_CREATED")) return 5;
+    if(has("POLICY_DECISION","CANDIDATE_SELECTED")) return 4;
+    if(has("SEARCH_STARTED","DISCOVERY_QUERY_PLANNED","PRODUCT_FOUND")) return 1;
+    return 1;
+  };
+  let cur=1,bad="",curNote="In progress";
+  switch(st){
+    case "CREATED":cur=1;curNote="Starting";break;
+    case "SEARCHING":cur=1;curNote="Searching";break;
+    case "AWAITING_STEP_UP":cur=3;curNote="Awaiting your approval";break;
+    case "BLOCKED":cur=3;bad="Blocked";break;
+    case "REJECTED":cur=3;bad="Rejected";break;
+    case "READY_TO_PAY":cur=4;curNote="Ready";break;
+    case "PAYPAL_APPROVAL_PENDING":case "PAYMENT_PENDING":cur=5;curNote="Awaiting buyer";break;
+    case "AUTHORIZED":cur=6;curNote="Ready to capture";break;
+    case "CAPTURE_PENDING":cur=7;curNote="Awaiting webhook";break;
+    case "CAPTURED":cur=proofDone?9:8;curNote="Generating";break;
+    case "FAILED":cur=Math.min(fromEvents(),8);bad="Failed";break;
+    case "CANCELLED":cur=Math.min(fromEvents(),8);bad="Cancelled";break;
+    default:cur=fromEvents();
+  }
+  return STEP_LABELS.map((label,i)=>{
+    let state:StepState,note:string;
+    if(i<cur){
+      if(i===2&&(!agent||agent.status==="UNAVAILABLE")){state="skipped";note=agent?"Unavailable":"Not used";}
+      else{state="done";note="Done";}
+    }else if(i===cur){
+      if(bad){state="blocked";note=bad;}else{state="current";note=curNote;}
+    }else{state="pending";note="Pending";}
+    return {key:label,label,state,note};
+  });
+}
+
+type EventGroup={key:string;label:string;events:Event[];summary:string};
+const REPEATED_EVENTS=new Set(["PRODUCT_FOUND","POLICY_DECISION","FX_QUOTE_BOUND","MERCHANT_TEXT_OBSERVED","PAYEE_IDENTITY_BOUND"]);
+const PHASES:{key:string;label:string}[]=[
+  {key:"discovery",label:"Discovery"},{key:"evaluation",label:"Evaluation"},{key:"agent",label:"Agent"},
+  {key:"payment",label:"Payment"},{key:"settlement",label:"Settlement & proof"},{key:"other",label:"Other"}
+];
+function phaseOf(t:string){
+  if(t.startsWith("AGENT_")) return "agent";
+  if(["PAYPAL_WEBHOOK_VERIFIED","RAZORPAY_WEBHOOK_VERIFIED","PAYMENT_CAPTURED","WALLET_SPEND_APPLIED","PROOF_RECEIPT_CREATED"].includes(t)) return "settlement";
+  if(["SESSION_CREATED","SEARCH_STARTED","DISCOVERY_QUERY_PLANNED","PRODUCT_FOUND","COMMERCE_NO_RESULTS"].includes(t)) return "discovery";
+  if(["POLICY_DECISION","PAYEE_IDENTITY_BOUND","FX_QUOTE_BOUND","MERCHANT_TEXT_OBSERVED","CANDIDATE_SELECTED","SESSION_BLOCKED"].includes(t)||t.startsWith("STEP_UP")) return "evaluation";
+  if(t.startsWith("PAYMENT_")||t.startsWith("PAYPAL_")||t.startsWith("RAZORPAY_")||t.startsWith("COMMERCE_QUOTE")) return "payment";
+  return "other";
+}
+const plural=(n:number,one:string,many=one+"s")=>`${n} ${n===1?one:many}`;
+function groupSummary(key:string,evs:Event[]):string{
+  const has=(...t:string[])=>evs.some(e=>t.includes(e.eventType));
+  const count=(t:string)=>evs.filter(e=>e.eventType===t).length;
+  const last=(t:string)=>[...evs].reverse().find(e=>e.eventType===t);
+  if(key==="discovery"){
+    const n=count("PRODUCT_FOUND");
+    if(n) return `${plural(n,"product")} found`;
+    if(has("COMMERCE_NO_RESULTS")) return "No marketplace products matched";
+    return has("SEARCH_STARTED","DISCOVERY_QUERY_PLANNED")?"Search started":"Session created";
+  }
+  if(key==="evaluation"){
+    const d=(v:string)=>evs.filter(e=>e.eventType==="POLICY_DECISION"&&e.payload.decision===v).length;
+    const parts:string[]=[];
+    if(d("ALLOW")) parts.push(`${d("ALLOW")} allowed`);
+    if(d("STEP_UP")) parts.push(`${d("STEP_UP")} step-up`);
+    if(d("BLOCK")) parts.push(`${d("BLOCK")} blocked`);
+    if(has("CANDIDATE_SELECTED")) parts.push("candidate selected");
+    if(has("SESSION_BLOCKED")) parts.push("session blocked");
+    return parts.length?parts.join(" · "):"Policy evaluation recorded";
+  }
+  if(key==="agent"){
+    const rec=last("AGENT_RECOMMENDATION");
+    if(rec?.payload.status==="UNAVAILABLE") return "Agent unavailable · fell back to marketplace order";
+    const sim=rec?.payload.simulated===true||rec?.payload.mode==="compromised";
+    const q=typeof rec?.payload.proposedQuantity==="number"?` × ${rec.payload.proposedQuantity}`:"";
+    const base=rec?`${sim?"Simulated compromised agent":"AI agent"} proposed${q}`:"Agent activity";
+    return has("AGENT_RECOMMENDATION_OVERRULED")?`${base} · overruled by policy`:rec?`${base} · policy agreed`:base;
+  }
+  if(key==="payment"){
+    const parts:string[]=[];
+    if(has("PAYMENT_RAIL_SELECTED")) parts.push("Rail selected");
+    if(has("PAYMENT_CHECKOUT_CREATED")) parts.push("Checkout created");
+    if(has("PAYPAL_AUTHORIZED")) parts.push("authorized");
+    if(has("PAYPAL_CAPTURE_REQUESTED")) parts.push("capture requested");
+    if(has("COMMERCE_QUOTE_CHANGED")) parts.push("quote changed, payment stopped");
+    if(!parts.length&&has("PAYPAL_BUYER_APPROVAL_REQUIRED")) parts.push("Buyer approval required");
+    return parts.length?parts.join(" · "):"Payment activity recorded";
+  }
+  if(key==="settlement"){
+    const cap=last("PAYMENT_CAPTURED");
+    const parts:string[]=[];
+    if(cap) parts.push(`Verified webhook settled ${money(Number(cap.payload.amount),String(cap.payload.currency))}`);
+    else if(has("PAYPAL_WEBHOOK_VERIFIED","RAZORPAY_WEBHOOK_VERIFIED")) parts.push("Webhook verified");
+    if(has("WALLET_SPEND_APPLIED")) parts.push("wallet debited");
+    if(has("PROOF_RECEIPT_CREATED")) parts.push("proof created");
+    return parts.join(" · ")||"Settlement activity recorded";
+  }
+  return plural(evs.length,"event");
+}
+function buildGroups(events:Event[]):EventGroup[]{
+  return PHASES.map(p=>{
+    const evs=events.filter(e=>phaseOf(e.eventType)===p.key);
+    return {key:p.key,label:p.label,events:evs,summary:groupSummary(p.key,evs)};
+  }).filter(g=>g.events.length>0);
+}
+function shortId(v:string){return v.length>24?`${v.slice(0,12)}…${v.slice(-8)}`:v;}
+function decisionLabel(d:string){return d==="STEP_UP"?"STEP UP":d;}
+
 export default function AutonomousPurchasePage(){
   const [wallets,setWallets]=useState<Wallet[]>([]);
   const [connectors,setConnectors]=useState<Connector[]>([]);
@@ -165,6 +288,9 @@ export default function AutonomousPurchasePage(){
   const readiness=useMemo(()=>wallet?walletReadiness(wallet):null,[wallet,wallets]);
   const agent=useMemo(()=>runAgent??agentFromEvents(events,session),[runAgent,events,session]);
   const blockReasons=useMemo(()=>[...new Set(candidates.flatMap(c=>c.decision==="BLOCK"?[...c.violations,...c.reasons]:[]))],[candidates]);
+  const steps=useMemo(()=>session?buildSteps(session,events,agent):[],[session,events,agent]);
+  const groups=useMemo(()=>buildGroups(events),[events]);
+  const candidateGroups=useMemo(()=>(["ALLOW","STEP_UP","BLOCK"] as const).map(d=>({decision:d,items:candidates.filter(c=>c.decision===d)})).filter(g=>g.items.length>0),[candidates]);
 
   async function load(){
     try{
@@ -318,16 +444,11 @@ export default function AutonomousPurchasePage(){
 
   const authorityCurrency=wallet?.currency??session?.selectedProduct?.authorizationContext?.walletCurrency??"INR";
   const selectedContext=session?.selectedProduct?.authorizationContext;
+  const selectedCand=session?.selectedProduct?candidates.find(c=>c.product.id===session.selectedProduct?.id)??null:null;
+  const costAmount=selectedCand?.walletAmount??selectedContext?.walletAmount??null;
+  const costCurrency=selectedCand?.walletCurrency??selectedContext?.walletCurrency??null;
 
-  return <Shell><div className="page">
-    <header className="pageHeader"><div>
-      <div className="eyebrow">LIVE PURCHASE · DETERMINISTIC POLICY</div>
-      <h1>Autonomous Purchase</h1>
-      <p>Discovery finds candidates. Wallet policy evaluates them independently. Payment then moves through an explicit provider state machine until verified settlement.</p>
-    </div>{session&&<span className="sessionIdBadge">{session.sessionId}</span>}</header>
-
-    <section className="purchaseSessionGrid">
-      <article className="card purchaseLaunch">
+  const launchCard=<article className="card purchaseLaunch">
         <div className="cardHeader"><div><h2>1. Delegate the task</h2><p>Select any wallet currency. Cross-currency products are normalized through a bound FX quote before policy evaluation.</p></div></div>
         <div className="sessionFormGrid">
           <label><span>Intent Wallet</span><select value={walletId} onChange={e=>setWalletId(e.target.value)}><option value="">Select wallet</option>{wallets.map(w=>{const r=walletReadiness(w);return <option key={w.walletId} value={w.walletId} disabled={!r.ready}>{w.name} · {w.countryCode} · {w.currency} · {r.label}</option>;})}</select></label>
@@ -359,74 +480,154 @@ export default function AutonomousPurchasePage(){
           </div>
         </fieldset>
         <button className="button buttonPrimary buttonWide" onClick={start} disabled={!!busy}>Start Autonomous Purchase</button>
-      </article>
+      </article>;
 
+  const status=session?.status??"";
+  const tone=status==="BLOCKED"||status==="FAILED"||status==="REJECTED"||status==="CANCELLED"?"blocked":status==="CAPTURED"?"done":"active";
+
+  return <Shell><div className="page pf">
+    <header className="pageHeader"><div>
+      <div className="eyebrow">LIVE PURCHASE · DETERMINISTIC POLICY</div>
+      <h1>Autonomous Purchase</h1>
+      <p>Discovery finds candidates. Wallet policy evaluates them independently. Payment then moves through an explicit provider state machine until verified settlement.</p>
+    </div>{session&&<span className="sessionIdBadge" title={session.sessionId}>{shortId(session.sessionId)}</span>}</header>
+
+    {!session&&<section className="purchaseSessionGrid">
+      {launchCard}
       <article className="card"><div className="cardHeader"><div><h2>Session State</h2><p>Recommendation ≠ permission. Provider response ≠ trusted capture.</p></div></div>
-        {!session&&<div className="sessionEmpty">No purchase session started yet.</div>}
-        {session&&<>
-          <div className="sessionState">
-            <State label="Status" value={session.status}/><State label="Wallet" value={wallet?.name??session.walletId}/>
-            <State label="Connector" value={session.connectorId}/><State label="Decision" value={session.selectedDecision??"PENDING"}/>
-            <State label="Payment rail" value={session.paymentProvider?.toUpperCase()??"Selected at checkout"}/>
-            <State label="Order" value={session.providerOrderId??"Not created"}/><State label="Authorization" value={session.providerAuthorizationId??session.authorizationId??"Not created"}/>
-            <State label="Capture" value={session.providerCaptureId??"Not requested"}/><State label="Proof Receipt" value={session.proofReceiptId??"Not generated"}/>
-          </div>
-          <div className="sessionEmpty">{statusHelp(session.status)}</div>
-        </>}
+        <div className="sessionEmpty">No purchase session started yet.</div>
       </article>
-    </section>
+    </section>}
 
-    {busy&&<div className="alert alertInfo">{busy}</div>}
-    {error&&<div className="alert alertError">{error}</div>}
+    {busy&&<div className="alert alertInfo" role="status">{busy}</div>}
+    {error&&<div className="alert alertError" role="alert">{error}</div>}
 
-    {session?.status==="BLOCKED"&&<section className="sessionSection"><article className="decisionCard block">
-      <div className="decisionTop"><div><span className="miniLabel">WHY THIS SESSION STOPPED</span><h2>{candidates.length?"Policy rejected every returned candidate":"No marketplace candidates returned"}</h2></div></div>
-      <div className="decisionReasons">
-        {blockReasons.length?blockReasons.map(r=><span key={r}>{r.includes("_")?friendlyViolation(r):r}</span>):<span>Search returned no products. Try a simpler product query or another connector.</span>}
+    {session&&<>
+      <div className={`pf-strip pf-tone-${tone}`}>
+        <span className={`pf-chip pf-chip-status pf-tone-${tone}`}>{pretty(session.status)}</span>
+        <div className="pf-strip-item"><span>Wallet</span><strong>{wallet?.name??shortId(session.walletId)}</strong></div>
+        <div className="pf-strip-item"><span>Decision</span><strong>{session.selectedDecision?decisionLabel(session.selectedDecision):"PENDING"}</strong></div>
+        <div className="pf-strip-item"><span>{session.status==="CAPTURED"?"Captured":"Amount"}</span><strong>{session.status==="CAPTURED"&&session.capturedAmount!=null?money(Number(session.capturedAmount),session.capturedCurrency??session.selectedProduct?.currency??authorityCurrency):costAmount!=null&&costCurrency?money(costAmount,costCurrency):session.selectedProduct?money(session.selectedProduct.price,session.selectedProduct.currency):"—"}</strong></div>
       </div>
-      <p className="textMuted">These outcomes are computed from the selected wallet and returned product facts. They are not hard-coded transaction statuses.</p>
-    </article></section>}
 
-    {agent&&<AgentPanel agent={agent} candidates={candidates} session={session} events={events}/>}
+      <nav aria-label="Purchase lifecycle" className="pf-stepper">
+        <ol className="pf-steps">{steps.map((s,i)=><li key={s.key} className={`pf-step pf-step-${s.state}`} aria-current={s.state==="current"||s.state==="blocked"?"step":undefined}>
+          <span className="pf-step-mark" aria-hidden="true">{s.state==="done"?"✓":s.state==="blocked"?"!":s.state==="skipped"?"–":i+1}</span>
+          <span className="pf-step-text"><span className="pf-step-label">{s.label}</span><span className="pf-step-note">{s.note}</span></span>
+        </li>)}</ol>
+      </nav>
 
-    {events.length>0&&<section className="sessionSection"><div className="sectionTitleRow"><div><span className="miniLabel">VISIBLE AGENT ACTIVITY</span><h2>Session Trace</h2></div><span className="traceCount">{events.length} EVENTS</span></div>
-      <div className="agentTimeline">{events.map((event,index)=><div key={event.eventId} className="timelineEvent"><div className="timelineRail"><span className="timelineDot">{index+1}</span></div><div className="timelineBody"><div className="timelineTop"><strong>{pretty(event.eventType)}</strong><span>{new Date(event.occurredAt).toLocaleTimeString()}</span></div><EventDetails event={event} authorityCurrency={authorityCurrency}/></div></div>)}</div>
-    </section>}
+      <section className={`pf-next pf-tone-${tone}`} aria-labelledby="pf-next-h">
+        <div className="pf-next-top"><span className="pf-kicker" id="pf-next-h">NEXT ACTION</span><span className="pf-help">{statusHelp(session.status)}</span></div>
+        {session.selectedProduct&&<div className="pf-product">
+          <div className="pf-product-main"><span className="pf-product-merchant">{session.selectedProduct.merchant} · {session.selectedProduct.merchantCountry??selectedContext?.merchantCountry??"--"}</span><h2 className="pf-product-title">{session.selectedProduct.title}</h2></div>
+          <dl className="pf-product-figures">
+            <div><dt>Price</dt><dd>{money(session.selectedProduct.price,session.selectedProduct.currency)}</dd></div>
+            <div><dt>Wallet cost</dt><dd>{costAmount!=null&&costCurrency?money(costAmount,costCurrency):"—"}</dd></div>
+          </dl>
+        </div>}
 
-    {candidates.length>0&&<section className="sessionSection"><div className="sectionTitleRow"><div><span className="miniLabel">MULTI-CURRENCY MARKETPLACE EVALUATION</span><h2>Candidate Decisions</h2></div></div>
-      <div className="sessionCandidates">{candidates.map(c=>{const selected=session?.selectedProduct?.id===c.product.id;const fx=c.product.authorizationContext?.fxQuote;return <article key={c.product.id} className={`sessionCandidate ${c.decision.toLowerCase()} ${selected?"selected":""}`}>
-        <div className="candidateHead"><div><span>{c.product.merchant} · {c.product.merchantCountry??"--"}</span><h3>{c.product.title}</h3></div><strong>{money(c.product.price,c.product.currency)}</strong></div>
-        <div className="candidateMeta">{c.product.brand} · {c.product.features.join(" · ")}</div>
-        <div className="policyBox"><p>IntentLock authority cost: <strong>{money(c.walletAmount,c.walletCurrency)}</strong>{fx?` · FX ${fx.source}`:" · same currency"}</p></div>
-        {fx&&<div className="quoteBinding"><span>FX quote · expires {new Date(fx.expiresAt).toLocaleTimeString()}</span><code>{fx.quoteId} · 1 {fx.fromCurrency} = {fx.rate.toFixed(6)} {fx.toCurrency}</code></div>}
-        {c.product.merchantMessage&&<div className="untrustedMerchant"><div><span>MERCHANT INPUT</span><strong>UNTRUSTED</strong></div><p>{c.product.merchantMessage}</p></div>}
-        <div className={`candidateDecision ${c.decision.toLowerCase()}`}><strong>{c.decision}</strong><span>{c.decision==="ALLOW"?"Inside normalized wallet authority":c.decision==="STEP_UP"?`Needs +${money(c.additionalAuthorityRequired,c.walletCurrency)}`:[...c.violations.map(friendlyViolation),...c.reasons].join(" · ")}</span></div>
-        {selected&&<div className="selectedFlag">SELECTED BY SESSION</div>}
-      </article>;})}</div>
-    </section>}
+        {status==="BLOCKED"&&<div className="pf-action pf-action-block">
+          <span className="pf-kicker">WHY THIS SESSION STOPPED</span>
+          <h3>{candidates.length?"Policy rejected every returned candidate":"No marketplace candidates returned"}</h3>
+          <ul className="pf-reasons">{blockReasons.length?blockReasons.map(r=><li key={r}>{r.includes("_")?friendlyViolation(r):r}</li>):<li>Search returned no products. Try a simpler product query or another connector.</li>}</ul>
+          <p className="pf-fine">These outcomes are computed from the selected wallet and returned product facts. They are not hard-coded transaction statuses.</p>
+        </div>}
 
-    {session?.selectedProduct&&<section className="sessionSection">
-      <article className="selectedPurchaseCard"><div><span className="miniLabel">SELECTED CANDIDATE</span><h2>{session.selectedProduct.title}</h2><p>{session.selectedProduct.merchant} · {session.selectedProduct.merchantCountry??selectedContext?.merchantCountry??"--"}</p></div><div className="selectedPrice">{money(session.selectedProduct.price,session.selectedProduct.currency)}</div></article>
+        {session.selectedProduct&&<>
+          {session.status==="AWAITING_STEP_UP"&&!stepResult&&<div className="pf-action"><span className="pf-kicker">HUMAN AUTHORITY REQUIRED</span><h3>Step-Up Approval</h3><p>The merchant quote is valid, but its normalized wallet cost exceeds autonomous authority.</p><div className="pf-actions"><button className="button buttonSecondary" onClick={()=>resolveStepUp("REJECT")}>Reject</button><button className="button buttonSecondary" onClick={()=>resolveStepUp("RAISE_LIMIT")}>Raise Limit</button><button className="button buttonPrimary" onClick={()=>resolveStepUp("ALLOW_ONCE")}>Allow Once {money(selectedContext?.walletAmount??session.selectedProduct.price,selectedContext?.walletCurrency??session.selectedProduct.currency)}</button></div></div>}
 
-      {selectedContext&&<article className="card"><div className="cardHeader"><div><span className="miniLabel">BOUND PAYMENT CONTEXT</span><h2>{money(selectedContext.presentmentAmount,selectedContext.presentmentCurrency)} → {money(selectedContext.walletAmount,selectedContext.walletCurrency)}</h2><p>Buyer {selectedContext.buyerCountry} · merchant {selectedContext.merchantCountry} · {selectedContext.fxQuote?`FX ${selectedContext.fxQuote.source}`:"same currency"}</p></div></div>{selectedContext.fxQuote&&<div className="quoteBinding"><span>FX quote is part of the authorization hash</span><code>{selectedContext.fxQuote.quoteId} · expires {new Date(selectedContext.fxQuote.expiresAt).toLocaleString()}</code></div>}</article>}
+          {session.status==="READY_TO_PAY"&&<div className="pf-action"><span className="pf-kicker">INTENTLOCK AUTHORITY PASSED</span><h3>READY TO PAY</h3><p>IntentLock will now select a configured rail that can handle the merchant presentment currency/country. Checkout creation still does not mean capture.</p><div className="pf-actions"><button className="button buttonPrimary" onClick={createPayment} disabled={paymentBusy}>{paymentBusy?"Selecting payment rail…":`Create Authorized Checkout · ${money(session.selectedProduct.price,session.selectedProduct.currency)}`}</button></div></div>}
 
-      {session.status==="AWAITING_STEP_UP"&&!stepResult&&<article className="sessionStepUp"><div><span className="miniLabel">HUMAN AUTHORITY REQUIRED</span><h2>Step-Up Approval</h2><p>The merchant quote is valid, but its normalized wallet cost exceeds autonomous authority.</p></div><div className="sessionStepActions"><button className="button buttonSecondary" onClick={()=>resolveStepUp("REJECT")}>Reject</button><button className="button buttonSecondary" onClick={()=>resolveStepUp("RAISE_LIMIT")}>Raise Limit</button><button className="button buttonPrimary" onClick={()=>resolveStepUp("ALLOW_ONCE")}>Allow Once {money(selectedContext?.walletAmount??session.selectedProduct.price,selectedContext?.walletCurrency??session.selectedProduct.currency)}</button></div></article>}
+          {session.status==="PAYPAL_APPROVAL_PENDING"&&<div className="pf-action"><span className="pf-kicker">PAYPAL ORDER CREATED · NOT PAID</span><h3>BUYER APPROVAL REQUIRED</h3><p>The transaction is pending because PayPal approval has not returned yet. Resume checkout in the same tab; after approval IntentLock will authorize, revalidate and request capture.</p><div className="pf-actions"><button className="button buttonSecondary" onClick={refreshSession}>Refresh Status</button><button className="button buttonPrimary" onClick={resumePayment} disabled={paymentBusy}>Resume PayPal Approval</button></div></div>}
 
-      {session.status==="READY_TO_PAY"&&<article className="readyToPay"><div><span className="miniLabel">INTENTLOCK AUTHORITY PASSED</span><h2>READY TO PAY</h2><p>IntentLock will now select a configured rail that can handle the merchant presentment currency/country. Checkout creation still does not mean capture.</p></div><button className="button buttonPrimary" onClick={createPayment} disabled={paymentBusy}>{paymentBusy?"Selecting payment rail…":`Create Authorized Checkout · ${money(session.selectedProduct.price,session.selectedProduct.currency)}`}</button></article>}
+          {session.status==="AUTHORIZED"&&<div className="pf-action"><span className="pf-kicker">PAYPAL FUNDS HELD</span><h3>AUTHORIZED — NOT CAPTURED</h3><p>Buyer approval succeeded. If a browser/network interruption stopped the next step, the idempotent capture request can be safely resumed.</p><div className="pf-actions"><button className="button buttonPrimary" onClick={resumePayment} disabled={paymentBusy}>Resume Safe Capture</button></div></div>}
 
-      {session.status==="PAYPAL_APPROVAL_PENDING"&&<article className="paymentPendingCard"><div><span className="miniLabel">PAYPAL ORDER CREATED · NOT PAID</span><h2>BUYER APPROVAL REQUIRED</h2><p>The transaction is pending because PayPal approval has not returned yet. Resume checkout in the same tab; after approval IntentLock will authorize, revalidate and request capture.</p></div><div className="paymentPendingActions"><button className="button buttonPrimary" onClick={resumePayment} disabled={paymentBusy}>Resume PayPal Approval</button><button className="button buttonSecondary" onClick={refreshSession}>Refresh Status</button></div></article>}
+          {session.status==="CAPTURE_PENDING"&&<div className="pf-action"><span className="pf-kicker">CAPTURE REQUEST SENT</span><h3>WAITING FOR VERIFIED PAYPAL EVIDENCE</h3><p>This pending state is intentional: IntentLock will not trust the browser or capture API response alone. The verified webhook settles the wallet exactly once.</p><div className="pf-actions"><a className="button buttonSecondary" href={`/trust-center?sessionId=${encodeURIComponent(session.sessionId)}`}>Inspect Transaction</a><button className="button buttonPrimary" onClick={refreshSession}>Refresh Status</button></div></div>}
 
-      {session.status==="AUTHORIZED"&&<article className="paymentPendingCard"><div><span className="miniLabel">PAYPAL FUNDS HELD</span><h2>AUTHORIZED — NOT CAPTURED</h2><p>Buyer approval succeeded. If a browser/network interruption stopped the next step, the idempotent capture request can be safely resumed.</p></div><button className="button buttonPrimary" onClick={resumePayment} disabled={paymentBusy}>Resume Safe Capture</button></article>}
+          {session.status==="PAYMENT_PENDING"&&<div className="pf-action"><span className="pf-kicker">PAYMENT EXECUTION</span><h3>WAITING FOR VERIFIED WEBHOOK</h3><p>The selected alternate rail remains webhook-gated.</p>{payment?.checkoutUrl&&<div className="pf-actions"><a className="button buttonPrimary" href={payment.checkoutUrl} target="_blank" rel="noreferrer">Open Checkout</a></div>}</div>}
 
-      {session.status==="CAPTURE_PENDING"&&<article className="paymentPendingCard"><div><span className="miniLabel">CAPTURE REQUEST SENT</span><h2>WAITING FOR VERIFIED PAYPAL EVIDENCE</h2><p>This pending state is intentional: IntentLock will not trust the browser or capture API response alone. The verified webhook settles the wallet exactly once.</p></div><div className="paymentPendingActions"><button className="button buttonSecondary" onClick={refreshSession}>Refresh Status</button><a className="button buttonSecondary" href={`/trust-center?sessionId=${encodeURIComponent(session.sessionId)}`}>Inspect Transaction</a></div></article>}
+          {session.status==="CAPTURED"&&<div className="pf-action pf-action-done"><span className="pf-kicker">{proofVerified?"VERIFIED PAYMENT":"CAPTURE RECORDED - PROOF NOT VERIFIED"}</span><h3>PAYMENT CAPTURED</h3><p>{proofVerified?"Provider evidence, wallet ledger and signed proof verified.":"Capture is recorded. Open the proof receipt to inspect its verification result."}</p><div className="pf-captured-amount">{money(Number(session.capturedAmount??session.selectedProduct.price),session.capturedCurrency??session.selectedProduct.currency)}</div><div className="pf-actions"><a className="button buttonSecondary" href={`/trust-center?sessionId=${encodeURIComponent(session.sessionId)}`}>Open Transaction Control</a><a className="button buttonPrimary" href={`/proof/${encodeURIComponent(session.sessionId)}`}>View Proof Receipt</a></div></div>}
+        </>}
 
-      {session.status==="PAYMENT_PENDING"&&<article className="paymentPendingCard"><div><span className="miniLabel">PAYMENT EXECUTION</span><h2>WAITING FOR VERIFIED WEBHOOK</h2><p>The selected alternate rail remains webhook-gated.</p></div>{payment?.checkoutUrl&&<a className="button buttonPrimary" href={payment.checkoutUrl} target="_blank" rel="noreferrer">Open Checkout</a>}</article>}
+        {["CREATED","SEARCHING","FAILED","CANCELLED","REJECTED"].includes(status)&&<div className="pf-action"><p>{statusHelp(session.status)}</p></div>}
 
-      {session.status==="CAPTURED"&&<article className="capturedProofCard"><div><span className="miniLabel">{proofVerified?"VERIFIED PAYMENT":"CAPTURE RECORDED - PROOF NOT VERIFIED"}</span><h2>PAYMENT CAPTURED</h2><p>{proofVerified?"Provider evidence, wallet ledger and signed proof verified.":"Capture is recorded. Open the proof receipt to inspect its verification result."}</p></div><div className="capturedActions"><strong>{money(Number(session.capturedAmount??session.selectedProduct.price),session.capturedCurrency??session.selectedProduct.currency)}</strong><a className="button buttonPrimary" href={`/proof/${encodeURIComponent(session.sessionId)}`}>View Proof Receipt</a><a className="button buttonSecondary" href={`/trust-center?sessionId=${encodeURIComponent(session.sessionId)}`}>Open Transaction Control</a></div></article>}
-    </section>}
+        {selectedContext&&<details className="pf-disclosure pf-context"><summary>Bound payment context · {money(selectedContext.presentmentAmount,selectedContext.presentmentCurrency)} → {money(selectedContext.walletAmount,selectedContext.walletCurrency)}</summary>
+          <div className="pf-disclosure-body"><p>Buyer {selectedContext.buyerCountry} · merchant {selectedContext.merchantCountry} · {selectedContext.fxQuote?`FX ${selectedContext.fxQuote.source}`:"same currency"}</p>
+          {selectedContext.fxQuote&&<p className="pf-code"><span>FX quote is part of the authorization hash</span><code>{selectedContext.fxQuote.quoteId} · expires {new Date(selectedContext.fxQuote.expiresAt).toLocaleString()}</code></p>}</div>
+        </details>}
+      </section>
+
+      {agent&&<AgentPanel agent={agent} candidates={candidates} session={session} events={events}/>}
+
+      {candidates.length>0&&<section className="pf-section" aria-labelledby="pf-cand-h">
+        <div className="pf-section-head"><span className="pf-kicker">MULTI-CURRENCY MARKETPLACE EVALUATION</span><h2 id="pf-cand-h">Candidates <small>{candidates.length}</small></h2></div>
+        {candidateGroups.map(g=><div key={g.decision} className="pf-cgroup">
+          <h3 className={`pf-cgroup-head pf-d-${g.decision.toLowerCase()}`}><span>{decisionLabel(g.decision)}</span><b>{g.items.length}</b></h3>
+          <ul className="pf-clist">{g.items.map(c=>{
+            const selected=session.selectedProduct?.id===c.product.id;const fx=c.product.authorizationContext?.fxQuote;
+            const reason=c.decision==="ALLOW"?"Inside normalized wallet authority":c.decision==="STEP_UP"?`Needs +${money(c.additionalAuthorityRequired,c.walletCurrency)}`:[...c.violations.map(friendlyViolation),...c.reasons].join(" · ");
+            return <li key={c.product.id} className={`pf-cand pf-d-${c.decision.toLowerCase()} ${selected?"pf-cand-selected":""}`}>
+              <div className="pf-cand-row">
+                <div className="pf-cand-id"><h4>{c.product.title}</h4><span>{c.product.merchant} · {c.product.merchantCountry??"--"}</span></div>
+                <div className="pf-cand-money"><strong>{money(c.product.price,c.product.currency)}</strong><span>Wallet {money(c.walletAmount,c.walletCurrency)}</span></div>
+                <div className="pf-cand-verdict"><span className={`pf-chip pf-chip-${c.decision.toLowerCase()}`}>{decisionLabel(c.decision)}</span>{selected&&<span className="pf-selected">Selected</span>}</div>
+                <p className="pf-cand-reason" title={reason}>{reason||"—"}</p>
+              </div>
+              <details className="pf-disclosure pf-cand-details"><summary>Details</summary>
+                <div className="pf-disclosure-body">
+                  <p>{c.product.brand}{c.product.features.length?` · ${c.product.features.join(" · ")}`:""}</p>
+                  <p>IntentLock authority cost: <strong>{money(c.walletAmount,c.walletCurrency)}</strong>{fx?` · FX ${fx.source}`:" · same currency"}</p>
+                  {fx&&<p className="pf-code"><span>FX quote · expires {new Date(fx.expiresAt).toLocaleTimeString()}</span><code>{fx.quoteId} · 1 {fx.fromCurrency} = {fx.rate.toFixed(6)} {fx.toCurrency}</code></p>}
+                  {c.product.merchantMessage&&<div className="pf-untrusted"><div><span>MERCHANT INPUT</span><strong>UNTRUSTED</strong></div><p>{c.product.merchantMessage}</p></div>}
+                </div>
+              </details>
+            </li>;})}</ul>
+        </div>)}
+      </section>}
+
+      {groups.length>0&&<section className="pf-section" aria-labelledby="pf-act-h">
+        <div className="pf-section-head"><span className="pf-kicker">VISIBLE AGENT ACTIVITY</span><h2 id="pf-act-h">Session activity</h2></div>
+        <div className="pf-groups">{groups.map(g=>{
+          const seen=new Set<string>();
+          return <details key={g.key} className="pf-group">
+            <summary><span className="pf-group-label">{g.label}</span><span className="pf-group-summary">{g.summary}</span></summary>
+            <ul className="pf-group-list">{g.events.map(ev=>{
+              if(REPEATED_EVENTS.has(ev.eventType)){
+                if(seen.has(ev.eventType)) return null;
+                seen.add(ev.eventType);
+                const n=g.events.filter(x=>x.eventType===ev.eventType).length;
+                return <li key={ev.eventId}><strong>{pretty(ev.eventType)} × {n}</strong><p>Summarized above; per-item detail is in Candidates and the technical trace.</p></li>;
+              }
+              return <li key={ev.eventId}><div className="pf-ev-top"><strong>{pretty(ev.eventType)}</strong><time>{new Date(ev.occurredAt).toLocaleTimeString()}</time></div><EventDetails event={ev} authorityCurrency={authorityCurrency}/></li>;
+            })}</ul>
+          </details>;})}
+        </div>
+        <details className="pf-disclosure pf-trace"><summary>Show technical trace ({events.length} events)</summary>
+          <div className="agentTimeline">{events.map((event,index)=><div key={event.eventId} className="timelineEvent"><div className="timelineRail"><span className="timelineDot">{index+1}</span></div><div className="timelineBody"><div className="timelineTop"><strong>{pretty(event.eventType)}</strong><span>{new Date(event.occurredAt).toLocaleTimeString()}</span></div><EventDetails event={event} authorityCurrency={authorityCurrency}/></div></div>)}</div>
+        </details>
+      </section>}
+
+      <details className="pf-disclosure pf-tech"><summary>Technical details</summary>
+        <dl className="pf-tech-grid">
+          <TechRow label="Session" value={session.sessionId}/>
+          <TechRow label="Connector" value={session.connectorId}/>
+          <TechRow label="Payment rail" value={session.paymentProvider?.toUpperCase()??"Selected at checkout"}/>
+          <TechRow label="Order" value={session.providerOrderId??"Not created"}/>
+          <TechRow label="Authorization" value={session.providerAuthorizationId??session.authorizationId??"Not created"}/>
+          <TechRow label="Capture" value={session.providerCaptureId??"Not requested"}/>
+          <TechRow label="Proof receipt" value={session.proofReceiptId??"Not generated"}/>
+        </dl>
+      </details>
+
+      <details className="pf-disclosure pf-restart"><summary>Start another purchase</summary>
+        <div className="pf-disclosure-body">{launchCard}</div>
+      </details>
+    </>}
   </div></Shell>;
 }
 
+function TechRow({label,value}:{label:string;value:string}){return <div className="pf-tech-row"><dt>{label}</dt><dd title={value}>{shortId(value)}</dd></div>;}
 function Authority({label,value}:{label:string;value:string}){return <div><span>{label}</span><strong>{value}</strong></div>;}
 function State({label,value}:{label:string;value:string}){return <div className="sessionStateRow"><span>{label}</span><strong>{value}</strong></div>;}
 function AgentPanel({agent,candidates,session,events}:{agent:AgentRun;candidates:Candidate[];session:Session|null;events:Event[]}){
