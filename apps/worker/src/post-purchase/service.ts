@@ -111,7 +111,9 @@ export async function evaluateSessionRefund(
   const originalPresentmentAmount=Number(context?.presentmentAmount??payment.amount);
   const originalWalletDebit=Number(context?.walletAmount??(ledger as any).amount);
   let walletCreditAmount=0;
-  if(Number.isFinite(amount)&&amount>0&&originalPresentmentAmount>0&&originalWalletDebit>0){
+  // A blocked request (e.g. over-refund) reports its BLOCK decision; the credit
+  // calculation's own ratio guard would otherwise throw and hide the reasons.
+  if(policy.decision==="ALLOW"&&Number.isFinite(amount)&&amount>0&&originalPresentmentAmount>0&&originalWalletDebit>0){
     walletCreditAmount=calculateWalletRefundCredit({
       requestedPresentmentAmount:amount,
       originalPresentmentAmount,
